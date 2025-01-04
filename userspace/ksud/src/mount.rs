@@ -11,6 +11,7 @@ use crate::defs::KSU_OVERLAY_SOURCE;
 use log::{info, warn};
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use procfs::process::Process;
+use std::fs::create_dir_all;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -158,6 +159,7 @@ pub fn mount_overlayfs(
 #[cfg(any(target_os = "linux", target_os = "android"))]
 pub fn mount_tmpfs(dest: impl AsRef<Path>) -> Result<()> {
     info!("mount tmpfs on {}", dest.as_ref().display());
+    create_dir_all(dest.as_ref())?;
     let fs = fsopen("tmpfs", FsOpenFlags::FSOPEN_CLOEXEC)?;
     let fs = fs.as_fd();
     fsconfig_set_string(fs, "source", KSU_OVERLAY_SOURCE)?;
