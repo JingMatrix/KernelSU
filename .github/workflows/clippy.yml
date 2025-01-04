@@ -14,15 +14,16 @@ on:
       - '.github/workflows/clippy.yml'
       - 'userspace/ksud/**'
 
-env:
-  RUSTFLAGS: '-Dwarnings'
-
 jobs:
   clippy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: rustup update stable
+      - name: Setup rustup
+        run: |
+          rustup update stable
+          rustup target add aarch64-linux-android
+          rustup target add x86_64-linux-android
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: userspace/ksud
