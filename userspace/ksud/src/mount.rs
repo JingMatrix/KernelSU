@@ -159,6 +159,7 @@ pub fn mount_tmpfs(dest: impl AsRef<Path>) -> Result<()> {
     fsconfig_set_string(fs, "source", KSU_OVERLAY_SOURCE)?;
     fsconfig_create(fs)?;
     let mount = fsmount(fs, FsMountFlags::FSMOUNT_CLOEXEC, MountAttrFlags::empty())?;
+    mount_change(dest.as_ref(), MountPropagationFlags::PRIVATE)?;
     move_mount(
         mount.as_fd(),
         "",

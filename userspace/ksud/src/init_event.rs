@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
 use log::{info, warn};
+#[cfg(any(target_os = "linux", target_os = "android"))]
+use rustix::mount::{mount_change, MountPropagationFlags};
 use std::{collections::HashMap, path::Path};
 
 use crate::module::prune_modules;
@@ -160,6 +162,8 @@ pub fn on_post_data_fs() -> Result<()> {
     info!("mount module image: {target_update_img} to {module_dir}");
     mount::AutoMountExt4::try_new(target_update_img, module_dir, false)
         .with_context(|| "mount module image failed".to_string())?;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    mount_change(module_dir, MountPropagationFlags::PRIVATE)?;
 
     // tell kernel that we've mount the module, so that it can do some optimization
     ksucalls::report_module_mounted();
