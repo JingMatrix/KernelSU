@@ -84,5 +84,9 @@ ssize_t ksu_kernel_write_compat(struct file *p, const void *buf, size_t count,
 long ksu_strncpy_from_user_nofault(char *dst, const void __user *unsafe_addr,
 				   long count)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 	return strncpy_from_user_nofault(dst, unsafe_addr, count);
+#else
+	return strncpy_from_unsafe_user(dst, unsafe_addr, count);
+#endif
 }

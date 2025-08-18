@@ -524,6 +524,7 @@ static bool add_filename_trans(struct policydb *db, const char *s,
 		return false;
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
 	struct filename_trans_key key;
 	key.ttype = tgt->value;
 	key.tclass = cls->value;
@@ -531,8 +532,13 @@ static bool add_filename_trans(struct policydb *db, const char *s,
 
 	struct filename_trans_datum *last = NULL;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 	struct filename_trans_datum *trans =
 		policydb_filenametr_search(db, &key);
+#else
+	struct filename_trans_datum *trans =
+		hashtab_search(&db->filename_trans, &key);
+#endif
 	while (trans) {
 		if (ebitmap_get_bit(&trans->stypes, src->value - 1)) {
 			// Duplicate, overwrite existing data and return
@@ -561,6 +567,39 @@ static bool add_filename_trans(struct policydb *db, const char *s,
 
 	db->compat_filename_trans_count++;
 	return ebitmap_set_bit(&trans->stypes, src->value - 1, 1) == 0;
+#else // < 5.7.0, has no filename_trans_key, but struct filename_trans
+
+	struct filename_trans key;
+	key.ttype = tgt->value;
+	key.tclass = cls->value;
+	key.name = (char *)o;
+
+	struct filename_trans_datum *trans =
+		hashtab_search(db->filename_trans, &key);
+
+	if (trans == NULL) {
+		trans = (struct filename_trans_datum *)kcalloc(sizeof(*trans),
+							       1, GFP_ATOMIC);
+		if (!trans) {
+			pr_err("add_filename_trans: Failed to alloc datum\n");
+			return false;
+		}
+		struct filename_trans *new_key =
+			(struct filename_trans *)kmalloc(sizeof(*new_key),
+							 GFP_ATOMIC);
+		if (!new_key) {
+			pr_err("add_filename_trans: Failed to alloc new_key\n");
+			return false;
+		}
+		*new_key = key;
+		new_key->name = kstrdup(key.name, GFP_ATOMIC);
+		trans->otype = def->value;
+		hashtab_insert(db->filename_trans, new_key, trans);
+	}
+
+	return ebitmap_set_bit(&db->filename_trans_ttypes, src->value - 1, 1) ==
+	       0;
+#endif
 }
 
 static bool add_genfscon(struct policydb *db, const char *fs_name,
