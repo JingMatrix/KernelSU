@@ -124,6 +124,9 @@ static void umount_tw_func(struct callback_head *cb)
 
 int ksu_handle_umount(uid_t old_uid, uid_t new_uid)
 {
+#ifndef CONFIG_KSU_UMOUNT
+    return 0;
+#endif
     struct umount_tw *tw;
 
     // this hook is used for umounting overlayfs for some uid, if there isn't any module mounted, just ignore it!
