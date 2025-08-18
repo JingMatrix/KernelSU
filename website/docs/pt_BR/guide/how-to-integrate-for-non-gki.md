@@ -28,7 +28,7 @@ curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh
 Então, você deve verificar se o kprobe está ativado na configuração do seu kernel. Caso não esteja, adicione estas configurações a ele:
 
 ```txt
-CONFIG_KPROBES=y
+CONFIG_KSU_KPROBES_HOOK=y
 CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 ```
@@ -290,7 +290,7 @@ index 45306f9ef247..815091ebfca4 100755
 ```
 
 ::: info ENTRANDO NO MODO DE SEGURANÇA ACIDENTALMENTE?
-Se você estiver usando a integração manual e não desativar `CONFIG_KPROBES`, o usuário poderá acionar o Modo de Segurança pressionando o botão de diminuir volume após a inicialização! Portanto, se estiver usando a integração manual, é necessário desativar `CONFIG_KPROBES`!
+Se você estiver usando a integração manual e não desativar `CONFIG_KSU_KPROBES_HOOK`, o usuário poderá acionar o Modo de Segurança pressionando o botão de diminuir volume após a inicialização! Portanto, se estiver usando a integração manual, é necessário desativar `CONFIG_KSU_KPROBES_HOOK`!
 :::
 
 ### Falha ao executar `pm` no terminal?

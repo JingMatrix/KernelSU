@@ -23,4 +23,11 @@ config KSU_UMOUNT
 	help
 	  When disabled, the KernelSU setting of UMOUNT is a mere indicator of user configuration, instead of instructing KernelSU to umount overlayfs.
 
+config KSU_KPROBES_HOOK
+	bool "Integrate KernelSU via kprobe"
+	depends on KSU && KPROBES
+	default n
+	help
+	  If not enabled, then the kernel source must be changed to integrate KernelSU manually.
+
 endmenu

@@ -28,7 +28,7 @@ curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh
 然后，你需要检查你的内核是否开启了 *kprobe* 相关的配置，如果没有开启，需要添加以下配置：
 
 ```
-CONFIG_KPROBES=y
+CONFIG_KSU_KPROBES_HOOK=y
 CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 ```
@@ -259,7 +259,7 @@ index 2ff887661237..e758d7db7663 100644
 :::
 
 :::info 莫名其妙进入安全模式？
-如果你采用手动集成的方式，并且没有禁用`CONFIG_KPROBES`，那么用户在开机之后按音量下，也可能触发安全模式！因此如果使用手动集成，你需要关闭 `CONFIG_KPROBES`！
+如果你采用手动集成的方式，并且没有禁用`CONFIG_KSU_KPROBES_HOOK`，那么用户在开机之后按音量下，也可能触发安全模式！因此如果使用手动集成，你需要关闭 `CONFIG_KSU_KPROBES_HOOK`！
 :::
 
 ```diff

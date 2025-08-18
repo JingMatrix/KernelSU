@@ -28,7 +28,7 @@ curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh
 然後，您需要檢查您的核心是否啟用 *kprobe*，如果未啟用，則需要新增以下設定：
 
 ```
-CONFIG_KPROBES=y
+CONFIG_KSU_KPROBES_HOOK=y
 CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 ```
@@ -268,7 +268,7 @@ index 45306f9ef247..815091ebfca4 100755
 ```
 
 :::info 不小心進入安全模式？
-如果您使用手動整合且不停用 `CONFIG_KPROBES`，那麼您將可能會在啟動後透過按下音量來減少按鈕來觸發安全模式！因此，如果使用手動集成，您需要停用 `CONFIG_KPROBES` ！
+如果您使用手動整合且不停用 `CONFIG_KSU_KPROBES_HOOK`，那麼您將可能會在啟動後透過按下音量來減少按鈕來觸發安全模式！因此，如果使用手動集成，您需要停用 `CONFIG_KSU_KPROBES_HOOK` ！
 :::
 
 ### 無法在終端中執行 `pm` ? {#failed-to-execute-pm-in-terminal}

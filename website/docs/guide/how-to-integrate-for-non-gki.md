@@ -28,7 +28,7 @@ curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh
 Then, you should check if kprobe is enabled in your kernel config. If it isn't, add these configs to it:
 
 ```txt
-CONFIG_KPROBES=y
+CONFIG_KSU_KPROBES_HOOK=y
 CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 ```
@@ -290,7 +290,7 @@ index 45306f9ef247..815091ebfca4 100755
 ```
 
 ::: info ENTERING SAFE MODE ACCIDENTALLY?
-If you're using manual integration and don't disable `CONFIG_KPROBES`, the user will be able to trigger Safe Mode by pressing the volume down button after booting! Therefore, if you're using manual integration, it's necessary to disable `CONFIG_KPROBES`!
+If you're using manual integration and don't disable `CONFIG_KSU_KPROBES_HOOK`, the user will be able to trigger Safe Mode by pressing the volume down button after booting! Therefore, if you're using manual integration, it's necessary to disable `CONFIG_KSU_KPROBES_HOOK`!
 :::
 
 ### Failed to execute `pm` in terminal?

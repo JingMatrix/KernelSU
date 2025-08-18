@@ -24,7 +24,7 @@ curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh
 次に、*kprobe* がカーネル設定で有効になっているか確認してください。もし有効でなければ、これらの設定を追加してください：
 
 ```
-CONFIG_KPROBES=y
+CONFIG_KSU_KPROBES_HOOK=y
 CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 ```
@@ -299,5 +299,5 @@ index 45306f9ef247..815091ebfca4 100755
 最後に、カーネルを再度ビルドすると、KernelSU が正常に動作するはずです。
 
 :::info 誤ってセーフ モードに入ってしまった場合は、
-手動統合を使用し、`CONFIG_KPROBES` を無効にしない場合、ユーザーは起動後に音量を下げるボタンを押してセーフ モードをトリガーする可能性があります。 したがって、手動統合を使用する場合は、`CONFIG_KPROBES` を無効にする必要があります。
+手動統合を使用し、`CONFIG_KSU_KPROBES_HOOK` を無効にしない場合、ユーザーは起動後に音量を下げるボタンを押してセーフ モードをトリガーする可能性があります。 したがって、手動統合を使用する場合は、`CONFIG_KSU_KPROBES_HOOK` を無効にする必要があります。
 :::

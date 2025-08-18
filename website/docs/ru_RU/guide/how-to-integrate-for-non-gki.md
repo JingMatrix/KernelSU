@@ -24,7 +24,7 @@ curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh
 Затем необходимо проверить, включена ли функция *kprobe* в конфигурации ядра, если нет, то добавьте в нее эти настройки:
 
 ```
-CONFIG_KPROBES=y
+CONFIG_KSU_KPROBES_HOOK=y
 CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 ```
