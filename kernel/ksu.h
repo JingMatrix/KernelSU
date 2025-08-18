@@ -35,6 +35,10 @@
 #define KSU_MAX_GROUPS 32
 #define KSU_SELINUX_DOMAIN 64
 
+#ifndef CONFIG_KSU_KPROBES_HOOK
+#undef CONFIG_KPROBES
+#endif
+
 struct root_profile {
 	int32_t uid;
 	int32_t gid;
