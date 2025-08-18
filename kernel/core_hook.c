@@ -125,7 +125,9 @@ static void disable_seccomp()
 #ifdef CONFIG_SECCOMP
 	current->seccomp.mode = 0;
 	current->seccomp.filter = NULL;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
 	atomic_set(&current->seccomp.filter_count, 0);
+#endif
 #else
 #endif
 }
@@ -567,6 +569,9 @@ static void try_umount(const char *mnt, bool check_mnt, int flags)
 
 int ksu_handle_setuid(struct cred *new, const struct cred *old)
 {
+#ifndef CONFIG_KSU_UMOUNT
+	return 0;
+#endif
 	// this hook is used for umounting overlayfs for some uid, if there isn't any module mounted, just ignore it!
 	if (!ksu_module_mounted) {
 		return 0;
