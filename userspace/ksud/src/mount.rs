@@ -1,4 +1,6 @@
 use anyhow::{Ok, Result, anyhow, bail};
+use std::ffi::CString;
+use std::io::{Error, ErrorKind};
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
 use anyhow::Context;
@@ -136,16 +138,18 @@ pub fn mount_overlayfs(
 
     if let Err(e) = result {
         warn!("fsopen mount failed: {e:#}, fallback to mount");
-        let mut data = format!("lowerdir={lowerdir_config}");
+        let mut data_string = format!("lowerdir={lowerdir_config}");
         if let (Some(upperdir), Some(workdir)) = (upperdir, workdir) {
-            data = format!("{data},upperdir={upperdir},workdir={workdir}");
+            data_string = format!("{data_string},upperdir={upperdir},workdir={workdir}");
         }
+        let data_cstring =
+            CString::new(data_string).map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
         mount(
             KSU_OVERLAY_SOURCE,
             dest.as_ref(),
             "overlay",
             MountFlags::empty(),
-            data,
+            data_cstring.as_c_str(),
         )?;
     }
     Ok(())
