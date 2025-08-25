@@ -7,6 +7,7 @@ use crate::{
     assets, defs, ksucalls, mount, restorecon,
     utils::{self, ensure_clean_dir},
 };
+use rustix::fs::symlink;
 
 fn mount_partition(partition_name: &str, lowerdir: &Vec<String>) -> Result<()> {
     if lowerdir.is_empty() {
@@ -127,13 +128,16 @@ pub fn on_post_data_fs() -> Result<()> {
     let module_update_img = defs::MODULE_UPDATE_IMG;
     let module_img = defs::MODULE_IMG;
     let module_dir = defs::MODULE_DIR;
+    let module_mount_dir = defs::MOUNT_MODULE_DIR;
     let module_update_flag = Path::new(defs::WORKING_DIR).join(defs::UPDATE_FILE_NAME);
 
     // modules.img is the default image
     let mut target_update_img = &module_img;
 
     // we should clean the module mount point if it exists
+    ensure_clean_dir(module_mount_dir)?;
     ensure_clean_dir(module_dir)?;
+    std::fs::remove_dir(module_dir)?;
 
     assets::ensure_binaries(true).with_context(|| "Failed to extract bin assets")?;
 
@@ -157,9 +161,11 @@ pub fn on_post_data_fs() -> Result<()> {
 
     // we should always mount the module.img to module dir
     // becuase we may need to operate the module dir in safe mode
-    info!("mount module image: {target_update_img} to {module_dir}");
-    mount::AutoMountExt4::try_new(target_update_img, module_dir, false)
+    info!("mount module image: {target_update_img} to {module_mount_dir}");
+    mount::AutoMountExt4::try_new(target_update_img, module_mount_dir, false)
         .with_context(|| "mount module image failed".to_string())?;
+
+    symlink(module_mount_dir, module_dir).with_context(|| "failed to create symbolic link")?;
 
     // tell kernel that we've mount the module, so that it can do some optimization
     ksucalls::report_module_mounted();

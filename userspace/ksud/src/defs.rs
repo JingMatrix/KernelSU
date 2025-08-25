@@ -17,16 +17,17 @@ pub const MAGISKBOOT_PATH: &str = concatcp!(BINARY_DIR, "magiskboot");
 #[cfg(target_os = "android")]
 pub const DAEMON_LINK_PATH: &str = concatcp!(BINARY_DIR, "ksud");
 
-pub const MODULE_DIR: &str = concatcp!(ADB_DIR, "modules/");
+pub const MODULE_DIR: &str = concatcp!(ADB_DIR, "modules");
 pub const MODULE_IMG: &str = concatcp!(WORKING_DIR, "modules.img");
 pub const MODULE_UPDATE_IMG: &str = concatcp!(WORKING_DIR, "modules_update.img");
+pub const MOUNT_MODULE_DIR: &str = "/apex/modules";
 
 pub const MODULE_UPDATE_TMP_IMG: &str = concatcp!(WORKING_DIR, "update_tmp.img");
 
 // warning: this directory should not change, or you need to change the code in module_installer.sh!!!
 pub const MODULE_UPDATE_TMP_DIR: &str = concatcp!(ADB_DIR, "modules_update/");
 
-pub const SYSTEM_RW_DIR: &str = concatcp!(MODULE_DIR, ".rw/");
+pub const SYSTEM_RW_DIR: &str = concatcp!(MODULE_DIR, "/.rw/");
 
 pub const TEMP_DIR: &str = "/apex/debug_ramdisk";
 pub const MODULE_WEB_DIR: &str = "webroot";
