@@ -17,6 +17,7 @@
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksud.h"
+#include "mount_hook.h"
 #include "kernel_compat.h"
 #include "selinux/selinux.h"
 
@@ -64,6 +65,10 @@ void on_post_fs_data(void)
 	static bool done = false;
 	if (done) {
 		pr_info("on_post_fs_data already done\n");
+#ifdef CONFIG_KPROBES
+		ksu_pause_mount_propagation(false);
+		ksu_mount_hook_exit();
+#endif
 		return;
 	}
 	done = true;
@@ -74,6 +79,11 @@ void on_post_fs_data(void)
 
 	ksu_devpts_sid = ksu_get_devpts_sid();
 	pr_info("devpts sid: %d\n", ksu_devpts_sid);
+
+#ifdef CONFIG_KPROBES
+	ksu_mount_hook_init();
+	ksu_pause_mount_propagation(true);
+#endif
 }
 
 #define MAX_ARG_STRINGS 0x7FFFFFFF
