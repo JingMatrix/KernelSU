@@ -17,6 +17,7 @@
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksud.h"
+#include "mount_hook.h"
 #include "kernel_compat.h"
 #include "selinux/selinux.h"
 
@@ -74,6 +75,10 @@ void on_post_fs_data(void)
 
 	ksu_devpts_sid = ksu_get_devpts_sid();
 	pr_info("devpts sid: %d\n", ksu_devpts_sid);
+
+#ifdef CONFIG_KPROBES
+	ksu_mount_hook_init();
+#endif
 }
 
 #define MAX_ARG_STRINGS 0x7FFFFFFF
@@ -266,6 +271,9 @@ int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
 		first_app_process = false;
 		pr_info("exec app_process, /data prepared, second_stage: %d\n",
 			init_second_stage_executed);
+#ifdef CONFIG_KPROBES
+		ksu_set_zygote_started();
+#endif
 		on_post_fs_data(); // we keep this for old ksud
 		stop_execve_hook();
 	}

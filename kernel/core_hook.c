@@ -336,6 +336,9 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			if (!boot_complete_lock) {
 				boot_complete_lock = true;
 				pr_info("boot_complete triggered\n");
+#ifdef CONFIG_KPROBES
+				ksu_mount_hook_exit();
+#endif
 			}
 			break;
 		}
