@@ -21,6 +21,7 @@
 #include "ksud.h"
 #include "kernel_umount.h"
 #include "manager.h"
+#include "mount_hook.h"
 #include "selinux/selinux.h"
 #include "objsec.h"
 #include "file_wrapper.h"
@@ -106,6 +107,9 @@ static int do_report_event(void __user *arg)
         static bool boot_complete_lock = false;
         if (!boot_complete_lock) {
             boot_complete_lock = true;
+#ifdef CONFIG_KPROBES
+            ksu_mount_hook_exit();
+#endif
             pr_info("boot_complete triggered\n");
             on_boot_completed();
         }

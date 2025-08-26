@@ -23,6 +23,7 @@
 #include "klog.h" // IWYU pragma: keep
 #include "ksud.h"
 #include "util.h"
+#include "mount_hook.h"
 #include "selinux/selinux.h"
 #include "throne_tracker.h"
 
@@ -76,7 +77,11 @@ void on_post_fs_data(void)
     stop_input_hook();
 
     ksu_file_sid = ksu_get_ksu_file_sid();
-    pr_info("ksu_file sid: %d\n", ksu_file_sid);
+	pr_info("ksu_file sid: %d\n", ksu_file_sid);
+
+#ifdef CONFIG_KPROBES
+    ksu_mount_hook_init();
+#endif
 }
 
 extern void ext4_unregister_sysfs(struct super_block *sb);
@@ -297,6 +302,9 @@ int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
         first_app_process = false;
         pr_info("exec app_process, /data prepared, second_stage: %d\n",
                 init_second_stage_executed);
+#ifdef CONFIG_KPROBES
+        ksu_set_zygote_started();
+#endif
         struct task_struct *init_task;
         rcu_read_lock();
         init_task = rcu_dereference(current->real_parent);
