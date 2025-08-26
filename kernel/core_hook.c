@@ -40,6 +40,7 @@
 #include "ksu.h"
 #include "ksud.h"
 #include "manager.h"
+#include "mount_hook.h"
 #include "selinux/selinux.h"
 #include "throne_tracker.h"
 #include "throne_tracker.h"
@@ -328,6 +329,10 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 				post_fs_data_lock = true;
 				pr_info("post-fs-data triggered\n");
 				on_post_fs_data();
+#ifdef HAVE_KPROBES
+				ksu_mount_hook_init();
+				ksu_pause_mount_propagation(true);
+#endif
 			}
 			break;
 		}
@@ -336,6 +341,10 @@ int ksu_handle_prctl(int option, unsigned long arg2, unsigned long arg3,
 			if (!boot_complete_lock) {
 				boot_complete_lock = true;
 				pr_info("boot_complete triggered\n");
+#ifdef HAVE_KPROBES
+				ksu_pause_mount_propagation(false);
+				ksu_mount_hook_exit();
+#endif
 			}
 			break;
 		}
