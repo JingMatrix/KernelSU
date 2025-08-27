@@ -1,8 +1,8 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef KSU_MOUNT_HOOK_H_
 #define KSU_MOUNT_HOOK_H_
 
-#include <linux/types.h> // For the 'bool' type
+#include <linux/types.h>
+#include "ksu.h" // Introduce macro HAVE_KPROBES
 
 /**
  * @file mount_hook.h

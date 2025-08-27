@@ -13,14 +13,13 @@
 
 #include <linux/kprobes.h>
 #include <linux/atomic.h>
-#include <linux/mount.h>
 #include <linux/slab.h>
 #include <linux/kallsyms.h>
 #include <linux/version.h>
 
 #include "../../fs/mount.h"
+
 #include "mount_hook.h"
-#include "ksu.h"
 #include "arch.h"
 #include "klog.h"
 
@@ -30,6 +29,42 @@ static attach_recursive_mnt_t attach_recursive_mnt_fp = NULL;
 
 atomic_t ksu_mount_propagation_paused = ATOMIC_INIT(0);
 
+#ifdef CONFIG_KSU_DEBUG
+/**
+ * @brief Logs useful information about a mount point for debugging.
+ * @param prefix A string to prepend to the log lines (e.g., "Source").
+ * @param mnt The mount structure to inspect.
+ */
+static void log_mount_info(const char *prefix, struct mount *mnt)
+{
+	if (!mnt) {
+		pr_info("%s mount is <NULL>\n", prefix);
+		return;
+	}
+
+	char path_buf[256];
+	char *dpath;
+
+	struct path p = { .mnt = &mnt->mnt, .dentry = mnt->mnt.mnt_root };
+	dpath = d_path(&p, path_buf, sizeof(path_buf));
+
+	pr_info("--- Mount Info: %s ---\n", prefix);
+	pr_info("  -> Mnt Ptr:  %p\n", mnt);
+	pr_info("  -> Flags:    %#x\n", mnt->mnt.mnt_flags);
+
+	if (mnt->mnt.mnt_sb && mnt->mnt.mnt_sb->s_type) {
+		pr_info("  -> FS Type:  %s\n", mnt->mnt.mnt_sb->s_type->name);
+	}
+
+	if (IS_ERR(dpath)) {
+		pr_info("  -> Path:     <Error getting path: %ld>\n", PTR_ERR(dpath));
+	} else {
+		pr_info("  -> Path:     %s\n", dpath);
+	}
+	pr_info("--------------------------\n");
+}
+#endif // CONFIG_KSU_DEBUG
+
 #ifdef HAVE_KPROBES
 
 /**
@@ -38,7 +73,7 @@ atomic_t ksu_mount_propagation_paused = ATOMIC_INIT(0);
 struct ksu_attach_mnt_state {
 	struct mount *dest_mnt;
 	int original_flags;
-	bool spoofed; // Flag to track if we actually modified anything.
+	bool spoofed;
 };
 
 static int ksu_attach_recursive_mnt_entry(struct kretprobe_instance *ri,
@@ -46,36 +81,44 @@ static int ksu_attach_recursive_mnt_entry(struct kretprobe_instance *ri,
 {
 	struct mount *dest_mnt;
 	struct ksu_attach_mnt_state *state;
-	struct pt_regs *real_regs = PT_REAL_REGS(regs);
 
 	state = (struct ksu_attach_mnt_state *)ri->data;
-	state->spoofed = false; // Default to not spoofed
+	state->spoofed = false;
 
-	// Only proceed if the pausing feature is active
-	if (atomic_read(&ksu_mount_propagation_paused) == 0)
+	if (atomic_read(&ksu_mount_propagation_paused) == 0) {
 		return 0;
+	}
 
-	// Use KernelSU-style macros to get the second argument (the parent/destination mount)
-	dest_mnt = (struct mount *)PT_REGS_PARM2(real_regs);
+	dest_mnt = (struct mount *)PT_REGS_PARM2(regs);
 
-	// We only care about modifying mounts that are currently shared.
-	if (!(dest_mnt->mnt.mnt_flags & MNT_SHARED))
-		return 0; // It's already private, do nothing.
+#ifdef CONFIG_KSU_DEBUG
+	{
+		struct mount *source_mnt = (struct mount *)PT_REGS_PARM1(regs);
+		log_mount_info("Source", source_mnt);
+		log_mount_info("Dest  ", dest_mnt);
+	}
+#endif
 
-	pr_info("KernelSU: Paused mount propagation: Spoofing shared mount %p to private.\n",
-		dest_mnt);
+	// Always validate pointers from hooks before dereferencing
+	// to prevent kernel panics from unexpected call paths.
+	if (!dest_mnt) {
+		return 0;
+	}
+
+	// We only need to act if the destination is a shared mount.
+	if (!(dest_mnt->mnt.mnt_flags & MNT_SHARED)) {
+		return 0;
+	}
+
+	pr_info("Paused propagation: Spoofing shared mount %p to private.\n", dest_mnt);
 
 	// --- The Spoof ---
-	// 1. Save the original state to our private data area.
 	state->dest_mnt = dest_mnt;
 	state->original_flags = dest_mnt->mnt.mnt_flags;
 	state->spoofed = true;
-
-	// 2. Temporarily remove the MNT_SHARED flag.
-	//    !! CRITICAL WARNING: This is the racy, unsafe part !!
 	dest_mnt->mnt.mnt_flags &= ~MNT_SHARED;
 
-	return 0; // Proceed to execute the now-tricked original function.
+	return 0;
 }
 
 static int ksu_attach_recursive_mnt_ret(struct kretprobe_instance *ri,
@@ -84,16 +127,12 @@ static int ksu_attach_recursive_mnt_ret(struct kretprobe_instance *ri,
 	struct ksu_attach_mnt_state *state =
 		(struct ksu_attach_mnt_state *)ri->data;
 
-	// The entry_handler ensures `state->spoofed` is only true if we
-	// actually modified the flags.
-	if (!state->spoofed)
+	if (!state->spoofed) {
 		return 0;
+	}
 
 	// --- The Restoration ---
-	// Restore the original flags to the destination mount. This is guaranteed
-	// to run after the original function returns.
-	pr_info("KernelSU: Restoring original shared flags to mount %p.\n",
-		state->dest_mnt);
+	pr_info("Restoring original shared flags to mount %p.\n", state->dest_mnt);
 	state->dest_mnt->mnt.mnt_flags = state->original_flags;
 
 	return 0;
@@ -103,7 +142,7 @@ static struct kretprobe attach_recursive_mnt_krp = {
 	.handler = ksu_attach_recursive_mnt_ret,
 	.entry_handler = ksu_attach_recursive_mnt_entry,
 	.data_size = sizeof(struct ksu_attach_mnt_state),
-	.maxactive = 64, // A reasonable default for concurrent mounts
+	.maxactive = 64, // Max concurrent probed instances. 64 is a safe default.
 };
 
 #endif // HAVE_KPROBES
@@ -111,10 +150,10 @@ static struct kretprobe attach_recursive_mnt_krp = {
 void ksu_pause_mount_propagation(bool pause)
 {
 	if (pause) {
-		pr_info("KernelSU: Pausing mount propagation.\n");
+		pr_info("Pausing mount propagation.\n");
 		atomic_set(&ksu_mount_propagation_paused, 1);
 	} else {
-		pr_info("KernelSU: Resuming mount propagation.\n");
+		pr_info("Resuming mount propagation.\n");
 		atomic_set(&ksu_mount_propagation_paused, 0);
 	}
 }
@@ -127,7 +166,7 @@ int ksu_mount_hook_init(void)
 	attach_recursive_mnt_fp = (attach_recursive_mnt_t)kallsyms_lookup_name(
 		"attach_recursive_mnt");
 	if (!attach_recursive_mnt_fp) {
-		pr_err("KernelSU: Could not find symbol 'attach_recursive_mnt'. Hooking failed.\n");
+		pr_err("Could not find symbol 'attach_recursive_mnt'. Hooking failed.\n");
 		return -ENOENT;
 	}
 
@@ -136,15 +175,14 @@ int ksu_mount_hook_init(void)
 
 	ret = register_kretprobe(&attach_recursive_mnt_krp);
 	if (ret < 0) {
-		pr_err("KernelSU: kretprobe registration failed, returned %d\n",
-		       ret);
+		pr_err("kretprobe registration failed, returned %d\n", ret);
 		return ret;
 	}
 
-	pr_info("KernelSU: Mount propagation hook registered successfully.\n");
+	pr_info("Mount propagation hook registered successfully.\n");
 	return 0;
 #else
-	pr_info("KernelSU: Mount hook not enabled (HAVE_KPROBES not set).\n");
+	pr_info("Mount hook not enabled (HAVE_KPROBES not set).\n");
 	return 0;
 #endif
 }
@@ -153,10 +191,10 @@ void ksu_mount_hook_exit(void)
 {
 #ifdef HAVE_KPROBES
 	unregister_kretprobe(&attach_recursive_mnt_krp);
-	pr_info("KernelSU: Mount propagation hook unregistered.\n");
+	pr_info("Mount propagation hook unregistered.\n");
 
 	if (attach_recursive_mnt_krp.nmissed > 0) {
-		pr_warn("KernelSU: Missed %u instances of attach_recursive_mnt probe.\n",
+		pr_warn("Missed %u instances of attach_recursive_mnt probe.\n",
 			attach_recursive_mnt_krp.nmissed);
 	}
 #endif
