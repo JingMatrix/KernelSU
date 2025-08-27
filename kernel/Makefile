@@ -7,6 +7,7 @@ kernelsu-objs += core_hook.o
 kernelsu-objs += ksud.o
 kernelsu-objs += embed_ksud.o
 kernelsu-objs += kernel_compat.o
+kernelsu-objs += mount_hook.o
 
 kernelsu-objs += selinux/selinux.o
 kernelsu-objs += selinux/sepolicy.o

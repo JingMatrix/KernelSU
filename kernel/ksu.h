@@ -35,6 +35,9 @@
 #define KSU_MAX_GROUPS 32
 #define KSU_SELINUX_DOMAIN 64
 
+#ifdef CONFIG_KPROBES
+#define HAVE_KPROBES
+#endif
 #ifndef CONFIG_KSU_KPROBES_HOOK
 #undef CONFIG_KPROBES
 #endif
