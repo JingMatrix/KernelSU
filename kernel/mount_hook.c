@@ -23,10 +23,6 @@
 #include "arch.h"
 #include "klog.h"
 
-typedef int (*attach_recursive_mnt_t)(struct mount *, struct mount *,
-				      struct mountpoint *, bool);
-static attach_recursive_mnt_t attach_recursive_mnt_fp = NULL;
-
 atomic_t ksu_mount_propagation_paused = ATOMIC_INIT(0);
 
 #ifdef CONFIG_KSU_DEBUG
@@ -143,6 +139,7 @@ static struct kretprobe attach_recursive_mnt_krp = {
 	.entry_handler = ksu_attach_recursive_mnt_entry,
 	.data_size = sizeof(struct ksu_attach_mnt_state),
 	.maxactive = 64, // Max concurrent probed instances. 64 is a safe default.
+	.kp.symbol_name = "attach_recursive_mnt",
 };
 
 #endif // HAVE_KPROBES
@@ -161,19 +158,7 @@ void ksu_pause_mount_propagation(bool pause)
 int ksu_mount_hook_init(void)
 {
 #ifdef HAVE_KPROBES
-	int ret;
-
-	attach_recursive_mnt_fp = (attach_recursive_mnt_t)kallsyms_lookup_name(
-		"attach_recursive_mnt");
-	if (!attach_recursive_mnt_fp) {
-		pr_err("Could not find symbol 'attach_recursive_mnt'. Hooking failed.\n");
-		return -ENOENT;
-	}
-
-	attach_recursive_mnt_krp.kp.addr =
-		(kprobe_opcode_t *)attach_recursive_mnt_fp;
-
-	ret = register_kretprobe(&attach_recursive_mnt_krp);
+	int ret = register_kretprobe(&attach_recursive_mnt_krp);
 	if (ret < 0) {
 		pr_err("kretprobe registration failed, returned %d\n", ret);
 		return ret;
