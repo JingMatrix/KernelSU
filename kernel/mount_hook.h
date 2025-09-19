@@ -35,17 +35,9 @@ int ksu_mount_hook_init(void);
 void ksu_mount_hook_exit(void);
 
 /**
- * @brief Control function to dynamically enable or disable the mount
- *        propagation pause feature.
+ * @brief Signals that the Zygote process has started.
  *
- * This is the main control interface for the feature. It is designed to be
- * called from the KernelSU syscall/ioctl handler in response to a request
- * from the userspace `ksud` daemon.
- *
- * @param pause Set to `true` to pause shared mount propagation (forcing new
- *              mounts to be private). Set to `false` to restore the
- *              kernel's default behavior.
  */
-void ksu_pause_mount_propagation(bool pause);
+void ksu_set_zygote_started(void);
 
 #endif /* KSU_MOUNT_HOOK_H_ */

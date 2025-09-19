@@ -65,10 +65,6 @@ void on_post_fs_data(void)
 	static bool done = false;
 	if (done) {
 		pr_info("on_post_fs_data already done\n");
-#ifdef CONFIG_KPROBES
-		ksu_pause_mount_propagation(false);
-		ksu_mount_hook_exit();
-#endif
 		return;
 	}
 	done = true;
@@ -82,7 +78,6 @@ void on_post_fs_data(void)
 
 #ifdef CONFIG_KPROBES
 	ksu_mount_hook_init();
-	ksu_pause_mount_propagation(true);
 #endif
 }
 
@@ -276,6 +271,9 @@ int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
 		first_app_process = false;
 		pr_info("exec app_process, /data prepared, second_stage: %d\n",
 			init_second_stage_executed);
+#ifdef CONFIG_KPROBES
+		ksu_set_zygote_started();
+#endif
 		on_post_fs_data(); // we keep this for old ksud
 		stop_execve_hook();
 	}
