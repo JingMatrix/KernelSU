@@ -133,10 +133,8 @@ fun AppProfileScreen(
                     appLabel = appInfo.label,
                     appIcon = {
                         AppIconImage(
-                            packageInfo = appInfo.packageInfo,
-                            label = appInfo.label,
-                            modifier = Modifier
-                                .size(60.dp)
+                            app = appInfo,
+                            modifier = Modifier.size(60.dp)
                         )
                     },
                     profile = profile,

@@ -1,6 +1,5 @@
 package me.weishu.kernelsu.ui.component
 
-import android.content.pm.PackageInfo
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -20,34 +19,39 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import me.weishu.kernelsu.ui.viewmodel.SuperUserViewModel
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 import top.yukonga.miuix.kmp.utils.G2RoundedCornerShape
 
 @Composable
 fun AppIconImage(
-    packageInfo: PackageInfo,
-    label: String,
+    app: SuperUserViewModel.AppInfo,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    var icon by remember(packageInfo.packageName) { mutableStateOf<ImageBitmap?>(null) }
+    val pm = context.packageManager
+    var icon by remember(app.packageName, app.user) { mutableStateOf<ImageBitmap?>(null) }
 
-    LaunchedEffect(packageInfo.packageName) {
+    LaunchedEffect(app.packageName, app.user) {
         withContext(Dispatchers.IO) {
-            val drawable = packageInfo.applicationInfo?.loadIcon(context.packageManager)
-            val bitmap = drawable?.toBitmap()?.asImageBitmap()
+            val rawIcon = app.packageInfo.applicationInfo?.loadIcon(pm)
+
+            val finalIcon = rawIcon?.let {
+                // This is the key change: get the system-badged icon
+                pm.getUserBadgedIcon(it, app.user)
+            }
+
+            val bitmap = finalIcon?.toBitmap()?.asImageBitmap()
             icon = bitmap
         }
     }
 
-    icon.let { imageBitmap ->
-        imageBitmap?.let {
-            Image(
-                bitmap = it,
-                contentDescription = label,
-                modifier = modifier
-            )
-        }
+    icon?.let { imageBitmap ->
+        Image(
+            bitmap = imageBitmap,
+            contentDescription = app.label,
+            modifier = modifier
+        )
     } ?: Box(
         modifier = modifier
             .clip(G2RoundedCornerShape(12.dp))
