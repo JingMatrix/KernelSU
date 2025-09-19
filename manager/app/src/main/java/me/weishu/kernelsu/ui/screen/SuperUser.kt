@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.only
@@ -98,7 +99,7 @@ fun SuperUserPager(
     val searchStatus by viewModel.searchStatus
 
     LaunchedEffect(navigator) {
-        if (viewModel.appList.value.isEmpty() || viewModel.searchResults.value.isEmpty()) {
+        if (viewModel.appList.value.isEmpty()) {
             viewModel.fetchAppList()
         }
     }
@@ -259,10 +260,15 @@ fun SuperUserPager(
                         ),
                         overscrollEffect = null,
                     ) {
-                        items(viewModel.appList.value, key = { it.packageName + it.uid }) { app ->
-                            AppItem(app) {
-                                navigator.navigate(AppProfileScreenDestination(app)) {
-                                    launchSingleTop = true
+                        val appList = viewModel.appList.value
+                        items(appList, key = { it.packageName + it.uid }) { item ->
+                            if (item.packageName.startsWith("header.")) {
+                                ProfileHeader(name = item.label)
+                            } else {
+                                AppItem(item) {
+                                    navigator.navigate(AppProfileScreenDestination(item)) {
+                                        launchSingleTop = true
+                                    }
                                 }
                             }
                         }
@@ -274,6 +280,19 @@ fun SuperUserPager(
             }
         }
     }
+}
+
+@Composable
+private fun ProfileHeader(name: String) {
+    Text(
+        text = name,
+        style = MiuixTheme.textStyles.title2,
+        color = MiuixTheme.colorScheme.primary,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 18.dp)
+    )
 }
 
 @Composable
@@ -307,8 +326,7 @@ private fun AppItem(
             summary = app.packageName,
             leftAction = {
                 AppIconImage(
-                    packageInfo = app.packageInfo,
-                    label = app.label,
+                    app = app,
                     modifier = Modifier
                         .padding(end = 12.dp)
                         .size(48.dp)

@@ -8,11 +8,14 @@ import android.content.pm.PackageInfo
 import android.os.IBinder
 import android.os.Parcelable
 import android.os.SystemClock
+import android.os.UserHandle
+import android.os.UserManager
 import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
@@ -37,7 +40,6 @@ class SuperUserViewModel : ViewModel() {
         private var apps by mutableStateOf<List<AppInfo>>(emptyList())
     }
 
-
     private var _appList = mutableStateOf<List<AppInfo>>(emptyList())
     val appList: State<List<AppInfo>> = _appList
     private val _searchStatus = mutableStateOf(SearchStatus(""))
@@ -48,6 +50,7 @@ class SuperUserViewModel : ViewModel() {
         val label: String,
         val packageInfo: PackageInfo,
         val profile: Natives.Profile?,
+        val user: UserHandle,
     ) : Parcelable {
         val packageName: String
             get() = packageInfo.packageName
@@ -89,11 +92,13 @@ class SuperUserViewModel : ViewModel() {
         val result = withContext(Dispatchers.IO) {
             _searchStatus.value.resultStatus = SearchStatus.ResultStatus.LOAD
             _appList.value.filter {
-                it.label.contains(_searchStatus.value.searchText, true) || it.packageName.contains(
+                // Don't include headers in search results
+                !it.packageName.startsWith("header.") &&
+                (it.label.contains(_searchStatus.value.searchText, true) || it.packageName.contains(
                     _searchStatus.value.searchText,
                     true
                 ) || HanziToPinyin.getInstance().toPinyinString(it.label)
-                    .contains(_searchStatus.value.searchText, true)
+                    .contains(_searchStatus.value.searchText, true))
             }
         }
 
@@ -102,14 +107,12 @@ class SuperUserViewModel : ViewModel() {
             updateSearchText(text)
         } else {
             _searchResults.value = result
-
         }
         _searchStatus.value.resultStatus = if (result.isEmpty()) {
             SearchStatus.ResultStatus.EMPTY
         } else {
             SearchStatus.ResultStatus.SHOW
         }
-
     }
 
     private suspend inline fun connectKsuService(
@@ -142,7 +145,6 @@ class SuperUserViewModel : ViewModel() {
     }
 
     suspend fun fetchAppList() {
-
         isRefreshing = true
 
         val result = connectKsuService {
@@ -151,6 +153,8 @@ class SuperUserViewModel : ViewModel() {
 
         withContext(Dispatchers.IO) {
             val pm = ksuApp.packageManager
+            val userManager = ContextCompat.getSystemService(ksuApp, UserManager::class.java)!!
+            val userProfiles = userManager.userProfiles
             val start = SystemClock.elapsedRealtime()
 
             val binder = result.first
@@ -163,16 +167,17 @@ class SuperUserViewModel : ViewModel() {
             val packages = allPackages.list
 
             apps = packages.map {
-                val appInfo = it.applicationInfo
-                val uid = appInfo!!.uid
+                val appInfo = it.applicationInfo!!
+                val uid = appInfo.uid
+                val user = UserHandle.getUserHandleForUid(uid)
                 val profile = Natives.getAppProfile(it.packageName, uid)
                 AppInfo(
                     label = appInfo.loadLabel(pm).toString(),
                     packageInfo = it,
                     profile = profile,
+                    user = user,
                 )
             }.filter { it.packageName != ksuApp.packageName }
-
 
             val comparator = compareBy<AppInfo> {
                 when {
@@ -181,13 +186,44 @@ class SuperUserViewModel : ViewModel() {
                     else -> 2
                 }
             }.then(compareBy(Collator.getInstance(Locale.getDefault()), AppInfo::label))
-            _appList.value = apps.sortedWith(comparator).also {
-                isRefreshing = false
-            }.filter {
+
+            val filteredApps = apps.filter {
                 it.uid == 2000 // Always show shell
                         || showSystemApps || it.packageInfo.applicationInfo!!.flags.and(ApplicationInfo.FLAG_SYSTEM) == 0
             }
+
+            _appList.value = filteredApps
+                .groupBy { it.user }
+                .toSortedMap(compareBy { user -> userProfiles.indexOf(user).takeIf { it != -1 } ?: Int.MAX_VALUE }) // Sort groups by system profile order
+                .flatMap { (user, appsInGroup) ->
+                    // For a single-user system, don't show a header
+                    if (userProfiles.size <= 1) {
+                        appsInGroup.sortedWith(comparator)
+                    } else {
+                        // Create a header entry, followed by the apps for that user
+                        listOf(createProfileHeader(user, userManager)) + appsInGroup.sortedWith(comparator)
+                    }
+                }
+
+            isRefreshing = false
             Log.i(TAG, "load cost: ${SystemClock.elapsedRealtime() - start}")
         }
+    }
+
+    private fun createProfileHeader(user: UserHandle, userManager: UserManager): AppInfo {
+        val serial = userManager.getSerialNumberForUser(user)
+        val profileName = if (serial == 0L) "Main Profile" else "Private Profile"
+
+        val dummyPackageInfo = PackageInfo().apply {
+            packageName = "header.${user.hashCode()}"
+            applicationInfo = ApplicationInfo().apply { uid = -1 } // Ensure UID is invalid
+        }
+
+        return AppInfo(
+            label = profileName,
+            packageInfo = dummyPackageInfo,
+            profile = null,
+            user = user
+        )
     }
 }
