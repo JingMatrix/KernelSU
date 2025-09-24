@@ -171,10 +171,10 @@ fun HomePagerMiuix(
                             systemInfo = state.systemInfo,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        SupportLinks(
-                            onOpenUrl = actions.onOpenUrl,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
+                        // SupportLinks(
+                        //     onOpenUrl = actions.onOpenUrl,
+                        //     modifier = Modifier.fillMaxWidth(),
+                        // )
                         Spacer(
                             Modifier.height(
                                 bottomInnerPadding + if (!Natives.isFullFeatured())
@@ -649,10 +649,10 @@ private fun HomeScreenPreviewContent(
                 systemInfo = previewSystemInfo.copy(selinuxStatus = selinuxStatus),
                 modifier = Modifier.fillMaxWidth(),
             )
-            SupportLinks(
-                onOpenUrl = {},
-                modifier = Modifier.fillMaxWidth(),
-            )
+            // SupportLinks(
+            //     onOpenUrl = {},
+            //     modifier = Modifier.fillMaxWidth(),
+            // )
         }
     }
 }
