@@ -201,8 +201,8 @@ fun HomePager(
                         UpdateCard(themeMode)
                     }
                     InfoCard()
-                    DonateCard()
-                    LearnMoreCard()
+                    // DonateCard()
+                    // LearnMoreCard()
                 }
                 Spacer(Modifier.height(bottomInnerPadding))
             }
