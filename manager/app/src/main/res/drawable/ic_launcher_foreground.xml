@@ -5,18 +5,141 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <group
-        android:scaleX="0.135"
-        android:scaleY="0.135">
-        <path
-            android:pathData="M 259 259 H 541 V 541 H 259 V 259 Z"
-            android:strokeWidth="18"
-            android:strokeColor="#1e110d" />
-        <path
-            android:fillColor="#1e110d"
-            android:pathData="M 257 257 H 407 V 407 H 257 V 257 Z" />
-        <path
-            android:fillColor="#1e110d"
-            android:pathData="M 393 393 H 543 V 543 H 393 V 393 Z" />
-    </group>
+    <!-- The Central Core / Diamond -->
+    <path
+        android:pathData="M 54,43 L 65,54 L 54,65 L 43,54 Z"
+        android:fillColor="#FFFFFF"
+        android:strokeWidth="1.5"
+        android:strokeColor="#FFC107"/>
+
+    <!-- Layer 1: Inner Symmetrical Clusters -->
+    <path
+        android:pathData="M36,12 V30"
+        android:strokeWidth="2"
+        android:strokeColor="#00E676"
+        android:alpha="0.9"/>
+    <path
+        android:pathData="M72,12 V30"
+        android:strokeWidth="2"
+        android:strokeColor="#00E676"
+        android:alpha="0.9"/>
+    <path
+        android:pathData="M36,78 V96"
+        android:strokeWidth="2"
+        android:strokeColor="#00E676"
+        android:alpha="0.9"/>
+    <path
+        android:pathData="M72,78 V96"
+        android:strokeWidth="2"
+        android:strokeColor="#00E676"
+        android:alpha="0.9"/>
+
+    <!-- Layer 2: Outer Symmetrical Clusters -->
+    <path
+        android:pathData="M28,25 V40"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+    <path
+        android:pathData="M80,25 V40"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+    <path
+        android:pathData="M28,68 V83"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+    <path
+        android:pathData="M80,68 V83"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+
+    <!-- Layer 3: Short Drops Framing the Diamond -->
+    <path
+        android:pathData="M42,32 V41"
+        android:strokeWidth="1"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+    <path
+        android:pathData="M66,32 V41"
+        android:strokeWidth="1"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+    <path
+        android:pathData="M42,67 V76"
+        android:strokeWidth="1"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+    <path
+        android:pathData="M66,67 V76"
+        android:strokeWidth="1"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+    <path
+        android:pathData="M34,48 V53"
+        android:strokeWidth="0.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+    <path
+        android:pathData="M74,48 V53"
+        android:strokeWidth="0.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+    <path
+        android:pathData="M34,55 V60"
+        android:strokeWidth="0.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+    <path
+        android:pathData="M74,55 V60"
+        android:strokeWidth="0.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.7"/>
+
+    <!-- Layer 4: Drops at the Extremities -->
+    <path
+        android:pathData="M20,48 V58"
+        android:strokeWidth="1.2"
+        android:strokeColor="#00E676"
+        android:alpha="0.6"/>
+    <path
+        android:pathData="M88,48 V58"
+        android:strokeWidth="1.2"
+        android:strokeColor="#00E676"
+        android:alpha="0.6"/>
+    <path
+        android:pathData="M54,10 V18"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+    <path
+        android:pathData="M54,90 V98"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+
+    <!-- Final Layer: Central Vertical Stream (Shorter and Thinner) -->
+    <path
+        android:pathData="M54,24 V30"
+        android:strokeWidth="1.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.9"/>
+    <path
+        android:pathData="M54,34 V40"
+        android:strokeWidth="1.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+    <path
+        android:pathData="M54,68 V74"
+        android:strokeWidth="1.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.8"/>
+    <path
+        android:pathData="M54,78 V84"
+        android:strokeWidth="1.8"
+        android:strokeColor="#00E676"
+        android:alpha="0.9"/>
+
 </vector>
