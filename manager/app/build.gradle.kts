@@ -34,6 +34,10 @@ android {
         }
     }
 
+    defaultConfig {
+        applicationId = "org.matrix.su"
+    }
+
     buildFeatures {
         aidl = true
         buildConfig = true

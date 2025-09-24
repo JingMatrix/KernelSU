@@ -198,8 +198,8 @@ fun HomePager(
                         UpdateCard()
                     }
                     InfoCard()
-                    DonateCard()
-                    LearnMoreCard()
+                    // DonateCard()
+                    // LearnMoreCard()
                 }
                 Spacer(Modifier.height(bottomInnerPadding))
             }
