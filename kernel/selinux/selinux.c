@@ -47,20 +47,32 @@ void setup_selinux(const char *domain)
 void setenforce(bool enforce)
 {
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
+#ifdef KSU_COMPAT_USE_SELINUX_STATE
     selinux_state.enforcing = enforce;
+#else
+    selinux_enforcing = enforce;
+#endif
 #endif
 }
 
 bool getenforce()
 {
 #ifdef CONFIG_SECURITY_SELINUX_DISABLE
+#ifdef KSU_COMPAT_USE_SELINUX_STATE
     if (selinux_state.disabled) {
+#else
+    if (selinux_disabled) {
+#endif
         return false;
     }
 #endif
 
 #ifdef CONFIG_SECURITY_SELINUX_DEVELOP
+#ifdef KSU_COMPAT_USE_SELINUX_STATE
     return selinux_state.enforcing;
+#else
+    return selinux_enforcing;
+#endif
 #else
     return true;
 #endif

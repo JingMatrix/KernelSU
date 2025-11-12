@@ -12,8 +12,15 @@ config KSU
 config KSU_DEBUG
 	bool "KernelSU debug mode"
 	depends on KSU
-	default n
+	default y
 	help
 	  Enable KernelSU debug mode.
+
+config KSU_UMOUNT
+	bool "Umount overlayfs via LSM hooks"
+	depends on KSU
+	default n
+	help
+	  When disabled, the KernelSU setting of UMOUNT is a mere indicator of user configuration, instead of instructing KernelSU to umount overlayfs.
 
 endmenu
