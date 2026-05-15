@@ -1,7 +1,9 @@
 #include <linux/capability.h>
 #include <linux/cred.h>
+#include <linux/rwsem.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
+#include <linux/utsname.h>
 #include <linux/version.h>
 #include <linux/thread_info.h>
 #include "uapi/supercall.h"
@@ -688,6 +690,40 @@ static int do_disable_escape_to_root(void __user *arg)
     return 0;
 }
 
+static int do_set_spoof_version(void __user *arg)
+{
+    struct ksu_set_spoof_version_cmd cmd;
+
+    /* Safely copy the payload from user-space into kernel-space stack */
+    if (copy_from_user(&cmd, arg, sizeof(cmd))) {
+        pr_err("ksu: set_spoof_version copy_from_user failed\n");
+        return -EFAULT;
+    }
+
+    /* Strictly enforce null-termination to prevent kernel panics */
+    cmd.release[sizeof(cmd.release) - 1] = '\0';
+    cmd.version[sizeof(cmd.version) - 1] = '\0';
+
+    /* Acquire the UTS namespace write lock */
+    down_write(&uts_sem);
+
+    /* Overwrite the RAM where the kernel stored the compile-time strings */
+    if (strlen(cmd.release) > 0) {
+        strscpy(init_uts_ns.name.release, cmd.release, sizeof(init_uts_ns.name.release));
+    }
+    if (strlen(cmd.version) > 0) {
+        strscpy(init_uts_ns.name.version, cmd.version, sizeof(init_uts_ns.name.version));
+    }
+
+    /* Release the lock */
+    up_write(&uts_sem);
+
+    pr_info("KernelSU Stealth: OS release spoofed to '%s'\n", init_uts_ns.name.release);
+    pr_info("KernelSU Stealth: OS version spoofed to '%s'\n", init_uts_ns.name.version);
+
+    return 0;
+}
+
 // IOCTL handlers mapping table
 // clang-format off
 static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
@@ -834,6 +870,12 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .name = "DISABLE_ESCAPE_TO_ROOT", 
         .handler = do_disable_escape_to_root, 
         .perm_check = only_root 
+    },
+    {
+        .cmd = KSU_IOCTL_SET_SPOOF_VERSION,
+        .name = "SET_SPOOF_VERSION",
+        .handler = do_set_spoof_version,
+        .perm_check = only_root
     },
     {
         .cmd = 0,
