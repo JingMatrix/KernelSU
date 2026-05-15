@@ -13,6 +13,7 @@
 #include "ksu.h"
 #include "runtime/ksud_boot.h"
 #include "feature/kernel_umount.h"
+#include "feature/version_spoof.h"
 #include "manager/manager_identity.h"
 #include "selinux/selinux.h"
 #include "infra/file_wrapper.h"
@@ -694,6 +695,19 @@ static int do_disable_escape_to_root(void __user *arg)
     return 0;
 }
 
+static int do_set_spoof_version(void __user *arg)
+{
+    struct ksu_set_spoof_version_cmd cmd;
+
+    /* Safely copy the payload from user-space into kernel-space stack */
+    if (copy_from_user(&cmd, arg, sizeof(cmd))) {
+        pr_err("ksu: set_spoof_version copy_from_user failed\n");
+        return -EFAULT;
+    }
+
+    return ksu_set_spoof_version(&cmd);
+}
+
 // IOCTL handlers mapping table
 // clang-format off
 static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
@@ -842,6 +856,12 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .handler = do_disable_escape_to_root, 
         .perm_check = only_root,
         .allow_su_session = true
+    },
+    {
+        .cmd = KSU_IOCTL_SET_SPOOF_VERSION,
+        .name = "SET_SPOOF_VERSION",
+        .handler = do_set_spoof_version,
+        .perm_check = only_root
     },
     {
         .cmd = 0,
