@@ -157,6 +157,11 @@ struct ksu_set_spoof_cpu_cmd {
     __u64 hwcap2;     /* Auxiliary ELF Hardware Capabilities mask */
 };
 
+struct ksu_set_spoof_mem_cmd {
+    __u64 total_ram_bytes; /* Target total memory size in bytes (e.g. 8GB) */
+    __u64 cma_total_bytes; /* Target total CMA size in bytes (e.g. 512MB), can be 0 */
+};
+
 static const __u8 KSU_UMOUNT_WIPE = 0; /* ignore everything and wipe list */
 static const __u8 KSU_UMOUNT_ADD = 1; /* add entry (path + flags) */
 static const __u8 KSU_UMOUNT_DEL = 2; /* delete entry, strcmp */
@@ -192,5 +197,6 @@ static const __u32 KSU_IOCTL_DISABLE_ESCAPE_TO_ROOT = _IO('K', 21);
 
 static const __u32 KSU_IOCTL_SET_SPOOF_VERSION = _IOC(_IOC_WRITE, 'K', 42, 0);
 static const __u32 KSU_IOCTL_SET_SPOOF_CPU = _IOC(_IOC_WRITE, 'K', 43, 0);
+static const __u32 KSU_IOCTL_SET_SPOOF_MEM = _IOC(_IOC_WRITE, 'K', 44, 0);
 
 #endif

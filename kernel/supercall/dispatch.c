@@ -28,6 +28,7 @@
 #include "ksu.h"
 #include "runtime/ksud_boot.h"
 #include "feature/kernel_umount.h"
+#include "feature/mem_spoof.h"
 #include "manager/manager_identity.h"
 #include "selinux/selinux.h"
 #include "infra/file_wrapper.h"
@@ -885,6 +886,18 @@ static int do_set_spoof_cpu(void __user *arg)
     return 0;
 }
 
+static int do_set_spoof_mem(void __user *arg)
+{
+    struct ksu_set_spoof_mem_cmd cmd;
+
+    if (copy_from_user(&cmd, arg, sizeof(cmd))) {
+        pr_err("ksu: set_spoof_mem copy_from_user failed\n");
+        return -EFAULT;
+    }
+
+    return ksu_set_spoof_mem(cmd.total_ram_bytes, cmd.cma_total_bytes);
+}
+
 // IOCTL handlers mapping table
 // clang-format off
 static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
@@ -1042,6 +1055,12 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_SET_SPOOF_CPU,
         .name = "SET_SPOOF_CPU",
         .handler = do_set_spoof_cpu,
+        .perm_check = only_root
+    },
+    {
+        .cmd = KSU_IOCTL_SET_SPOOF_MEM,
+        .name = "SET_SPOOF_MEM",
+        .handler = do_set_spoof_mem,
         .perm_check = only_root
     },
     {
