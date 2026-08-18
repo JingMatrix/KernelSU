@@ -200,6 +200,10 @@
     <string name="settings_selinux_hide_summary">Prevent applications from detecting SELinux modifications</string>
     <string name="settings_selinux_hide_reboot_required">Reboot to take effect</string>
     <string name="settings_selinux_hide_failed">Error: %d</string>
+    <string name="settings_mount_hide">Hide suspicious mounts</string>
+    <string name="settings_mount_hide_summary">Filter KernelSU/module mount records from /proc mount views of isolated and app processes (defeats mount-based root detection).</string>
+    <string name="settings_mount_hide_reboot_required">Reboot to take effect</string>
+    <string name="settings_mount_hide_failed">Error: %d</string>
     <string name="settings_sulog">SU Log</string>
     <string name="settings_sulog_summary">Record Root-related events into KernelSU sulog files</string>
     <string name="feature_status_unsupported_summary">Kernel does not support this feature</string>

@@ -39,6 +39,8 @@ data class SettingsUiState(
     // SELinux Hide
     val selinuxHideStatus: String = "",
     val isSelinuxHideEnabled: Boolean = false,
+    val mountHideStatus: String = "",
+    val isMountHideEnabled: Boolean = false,
 
     // SU Log
     val sulogStatus: String = "",
@@ -72,6 +74,7 @@ data class SettingsScreenActions(
     val onSetKernelUmountEnabled: (Boolean) -> Unit,
     val onSetWebViewZygoteUmountEnabled: (Boolean) -> Unit,
     val onSetSelinuxHideEnabled: (Boolean) -> Unit,
+    val onSetMountHideEnabled: (Boolean) -> Unit,
     val onSetSulogEnabled: (Boolean) -> Unit,
     val onSetAdbRootEnabled: (Boolean) -> Unit,
     val onSetDefaultUmountModules: (Boolean) -> Unit,

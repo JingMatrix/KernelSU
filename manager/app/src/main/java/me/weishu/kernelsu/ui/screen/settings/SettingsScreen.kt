@@ -37,6 +37,7 @@ fun SettingPager(
         onSetKernelUmountEnabled = viewModel::setKernelUmountEnabled,
         onSetWebViewZygoteUmountEnabled = viewModel::setWebViewZygoteUmountEnabled,
         onSetSelinuxHideEnabled = viewModel::setSelinuxHideEnabled,
+        onSetMountHideEnabled = viewModel::setMountHideEnabled,
         onSetSulogEnabled = viewModel::setSulogEnabled,
         onSetAdbRootEnabled = viewModel::setAdbRootEnabled,
         onSetDefaultUmountModules = viewModel::setDefaultUmountModules,
