@@ -25,6 +25,7 @@
 #include "hook/syscall_hook.h"
 #include "feature/adb_root.h"
 #include "feature/selinux_hide.h"
+#include "feature/ptctl.h"
 #include "infra/symbol_resolver.h"
 
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
@@ -137,6 +138,7 @@ int __init kernelsu_init(void)
 
     ksu_supercalls_init();
     ksu_app_profile_init();
+    ksu_ptctl_init();
 
     if (ksu_late_loaded) {
         pr_info("late load mode, skipping kprobe hooks\n");
@@ -191,6 +193,10 @@ void __exit kernelsu_exit(void)
 {
     // Phase 1: Stop all hooks first to prevent new callbacks
     ksu_syscall_hook_manager_exit();
+
+    // The killguard kprobe and any armed HW breakpoints point at module text and
+    // must be retired before it is freed.
+    ksu_ptctl_exit();
 
     ksu_supercalls_exit();
 
