@@ -4,6 +4,7 @@ kernelsu-objs += feature/kernel_umount.o
 kernelsu-objs += feature/mount_hide.o
 kernelsu-objs += feature/mem_spoof.o
 kernelsu-objs += feature/ptctl.o
+kernelsu-objs += feature/uhook.o
 kernelsu-objs += feature/sulog.o
 kernelsu-objs += feature/sucompat.o
 

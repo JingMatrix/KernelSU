@@ -30,6 +30,7 @@
 #include "feature/kernel_umount.h"
 #include "feature/mem_spoof.h"
 #include "feature/ptctl.h"
+#include "feature/uhook.h"
 #include "manager/manager_identity.h"
 #include "selinux/selinux.h"
 #include "infra/file_wrapper.h"
@@ -912,6 +913,19 @@ static int do_ptctl(void __user *arg)
     return ret;
 }
 
+static int do_uhook(void __user *arg)
+{
+    struct ksu_uhook_cmd cmd;
+    int ret;
+
+    if (copy_from_user(&cmd, arg, sizeof(cmd)))
+        return -EFAULT;
+    ret = ksu_uhook(&cmd);
+    if (copy_to_user(arg, &cmd, sizeof(cmd)))
+        return -EFAULT;
+    return ret;
+}
+
 // IOCTL handlers mapping table
 // clang-format off
 static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
@@ -1081,6 +1095,12 @@ static const struct ksu_ioctl_cmd_map ksu_ioctl_handlers[] = {
         .cmd = KSU_IOCTL_PTCTL,
         .name = "PTCTL",
         .handler = do_ptctl,
+        .perm_check = only_root
+    },
+    {
+        .cmd = KSU_IOCTL_UHOOK,
+        .name = "UHOOK",
+        .handler = do_uhook,
         .perm_check = only_root
     },
     {
