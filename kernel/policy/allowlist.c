@@ -111,8 +111,6 @@ retry:
 
 static inline bool forbid_system_uid(uid_t uid)
 {
-#define SHELL_UID 2000
-#define SYSTEM_UID 1000
     return uid < SHELL_UID && uid != SYSTEM_UID;
 }
 

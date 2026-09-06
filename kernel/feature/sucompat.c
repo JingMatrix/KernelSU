@@ -63,11 +63,9 @@ static void __user *userspace_stack_buffer(const void *d, size_t len)
     return copy_to_user(p, d, len) ? NULL : p;
 }
 
-static char __user *ksud_user_path(void)
+static char __user *user_path_of(const char *path)
 {
-    static const char ksud_path[] = KSUD_PATH;
-
-    return userspace_stack_buffer(ksud_path, sizeof(ksud_path));
+    return userspace_stack_buffer(path, strlen(path) + 1);
 }
 
 static char __user *empty_user_path(void)
@@ -88,13 +86,50 @@ static bool is_ksud_exists()
     return true;
 }
 
+/*
+ * What a reference to `su` should resolve to, or NULL to leave it alone.
+ *
+ * Normally that is ksud, which is the su implementation; the kernel only
+ * supplies the identity. Requiring it to exist is deliberate -- it is what
+ * keeps a chrooted process, which cannot see it, from being redirected
+ * unexpectedly.
+ *
+ * An image patched with allow_shell is the one case where there may be no
+ * ksud to redirect to and su is still expected to work: the option grants
+ * root to the shell precisely so a device can be worked on before any
+ * manager has installed one. There, fall back to a plain root shell.
+ *
+ * That fallback is restricted to the shell itself rather than to everything
+ * ksu_is_allow_uid_for_current() admits. A manager, and any uid in an
+ * allowlist that survived on disk from an earlier install, can reach this
+ * path too, and a bare shell answers `su -c <cmd> <user>` by running <cmd>
+ * as root instead of as <user> -- so they keep the no-redirect behaviour.
+ *
+ * The caller must hold ksu_cred, because /data/adb is 0700 root and an
+ * unprivileged caller cannot walk to KSUD_PATH itself -- which is exactly why
+ * caller_uid is a parameter. Under the override current_uid() is ksu_cred's
+ * uid, so reading it here would compare 0 against SHELL_UID and never match.
+ */
+static const char *su_target_path(uid_t caller_uid)
+{
+    if (is_ksud_exists()) {
+        return KSUD_PATH;
+    }
+    if (unlikely(allow_shell && caller_uid == SHELL_UID)) {
+        return SH_PATH;
+    }
+    return NULL;
+}
+
 long ksu_handle_faccessat_sucompat(int orig_nr, struct pt_regs *regs)
 {
-    const char __user **filename_user, *orig_filename;
+    const char __user **filename_user, *orig_filename, *target_filename;
+    const uid_t caller_uid = current_uid().val;
+    const char *target;
     long ret;
     const struct cred *old_cred;
 
-    if (!ksu_is_allow_uid_for_current(current_uid().val)) {
+    if (!ksu_is_allow_uid_for_current(caller_uid)) {
         goto do_orig_facessat;
     }
 
@@ -106,10 +141,12 @@ long ksu_handle_faccessat_sucompat(int orig_nr, struct pt_regs *regs)
 
     if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
         old_cred = override_creds(ksu_cred);
-        if (is_ksud_exists()) {
-            pr_info("faccessat su->ksud!\n");
+        target = su_target_path(caller_uid);
+        target_filename = target ? user_path_of(target) : NULL;
+        if (target_filename) {
+            pr_info("faccessat su->%s!\n", target);
             orig_filename = *filename_user;
-            *filename_user = ksud_user_path();
+            *filename_user = target_filename;
             ret = ksu_syscall_table[orig_nr](regs);
             revert_creds(old_cred);
             *filename_user = orig_filename;
@@ -125,11 +162,13 @@ do_orig_facessat:
 
 long ksu_handle_stat_sucompat(int orig_nr, struct pt_regs *regs)
 {
-    const char __user **filename_user, *orig_filename;
+    const char __user **filename_user, *orig_filename, *target_filename;
+    const uid_t caller_uid = current_uid().val;
+    const char *target;
     long ret;
     const struct cred *old_cred;
 
-    if (!ksu_is_allow_uid_for_current(current_uid().val)) {
+    if (!ksu_is_allow_uid_for_current(caller_uid)) {
         goto do_orig_stat;
     }
 
@@ -141,10 +180,12 @@ long ksu_handle_stat_sucompat(int orig_nr, struct pt_regs *regs)
 
     if (unlikely(!memcmp(path, su_path, sizeof(su_path)))) {
         old_cred = override_creds(ksu_cred);
-        if (is_ksud_exists()) {
-            pr_info("newfstatat su->ksud!\n");
+        target = su_target_path(caller_uid);
+        target_filename = target ? user_path_of(target) : NULL;
+        if (target_filename) {
+            pr_info("newfstatat su->%s!\n", target);
             orig_filename = *filename_user;
-            *filename_user = ksud_user_path();
+            *filename_user = target_filename;
             ret = ksu_syscall_table[orig_nr](regs);
             revert_creds(old_cred);
             *filename_user = orig_filename;
@@ -163,13 +204,15 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
                                               bool execveat, int orig_nr, struct pt_regs *regs)
 {
     const char __user *fn;
+    const uid_t caller_uid = current_uid().val;
     struct ksu_sulog_pending_event *pending_sucompat = NULL;
     char path[sizeof(su_path) + 1];
     long ret, orig_regs[5];
     unsigned long addr;
     int su_fd = -1;
     int tmp_fd;
-    struct file *ksud_file;
+    const char *target;
+    struct file *target_file;
     const struct cred *old_cred;
 
     if (execveat && ((int)PT_REGS_PARM1(regs) != AT_FDCWD || (int)PT_REGS_PARM5(regs) != 0))
@@ -178,7 +221,7 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
     if (unlikely(!filename_user))
         goto do_orig_execve;
 
-    if (!ksu_is_allow_uid_for_current(current_uid().val))
+    if (!ksu_is_allow_uid_for_current(caller_uid))
         goto do_orig_execve;
 
     addr = untagged_addr((unsigned long)*filename_user);
@@ -204,15 +247,17 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
     }
 
     old_cred = override_creds(ksu_cred);
-    ksud_file = filp_open(KSUD_PATH, O_PATH, 0);
+    target = su_target_path(caller_uid);
+    target_file = target ? filp_open(target, O_PATH, 0) : ERR_PTR(-ENOENT);
     revert_creds(old_cred);
-    if (IS_ERR(ksud_file)) {
-        pr_err("open ksud err: %ld\n", PTR_ERR(ksud_file));
+    if (IS_ERR(target_file)) {
+        pr_err("open su target err: %ld\n", PTR_ERR(target_file));
         put_unused_fd(tmp_fd);
         goto do_orig_execve;
     }
+    pr_info("execve su->%s!\n", target);
 
-    fd_install(tmp_fd, ksud_file);
+    fd_install(tmp_fd, target_file);
 
     pending_sucompat = ksu_sulog_capture_sucompat(*filename_user, argv_user, GFP_KERNEL);
     // execve(file, argv, environ)
