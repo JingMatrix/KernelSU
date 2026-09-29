@@ -20,7 +20,9 @@
 #include "feature/sucompat.h"
 #include "hook/setuid_hook.h"
 #include "hook/syscall_hook.h"
+#include "hook/syscall_hook_direct.h"
 #include "hook/syscall_event_bridge.h"
+#include "infra/symbol_resolver.h"
 
 #ifdef CONFIG_KRETPROBES
 
@@ -126,6 +128,24 @@ void __init ksu_syscall_hook_manager_init(void)
     int ret;
     pr_info("hook_manager: ksu_hook_manager_init called\n");
 
+    // ksu_syscall_hook_init() (hook/arm64|x86_64/syscall_hook.c) already ran
+    // and leaves ksu_dispatcher_nr unset when installing the dispatcher was
+    // not attempted (ksu_kprobe_text_patch_unsafe(),
+    // hook/kprobe_patch_compat.h). That is a static, pre-boot property of
+    // this kernel, not something retried per syscall, so it is the whole
+    // branch: every hook this function would otherwise install through the
+    // shared dispatcher goes through syscall_hook_direct.h's per-syscall
+    // kprobes instead, and none of the dispatcher/tracepoint machinery below
+    // is touched at all.
+    if (ksu_dispatcher_nr < 0) {
+        ret = ksu_syscall_hook_direct_init();
+        if (ret)
+            pr_err("hook_manager: direct syscall hook fallback failed: %d\n", ret);
+        ksu_setuid_hook_init();
+        ksu_sucompat_init();
+        return;
+    }
+
 #ifdef CONFIG_KRETPROBES
     syscall_regfunc_rp = init_kretprobe("syscall_regfunc", syscall_regfunc_handler);
     syscall_unregfunc_rp = init_kretprobe("syscall_unregfunc", syscall_unregfunc_handler);
@@ -157,6 +177,14 @@ void __init ksu_syscall_hook_manager_init(void)
 void __exit ksu_syscall_hook_manager_exit(void)
 {
     pr_info("hook_manager: ksu_hook_manager_exit called\n");
+
+    if (ksu_dispatcher_nr < 0) {
+        ksu_syscall_hook_direct_exit();
+        ksu_sucompat_exit();
+        ksu_setuid_hook_exit();
+        return;
+    }
+
 #ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
     unregister_trace_sys_enter(ksu_sys_enter_handler, NULL);
     tracepoint_synchronize_unregister();

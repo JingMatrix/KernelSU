@@ -16,6 +16,8 @@
 #include "arch.h"
 #include "util.h"
 #include "klog.h" // IWYU pragma: keep
+#include "hook/syscall_hook.h"
+#include "hook/kprobe_patch_compat.h"
 
 #define KSU_DRIVER_PERMISSION_SU_SESSION (1UL << 0)
 
@@ -144,22 +146,79 @@ static struct kprobe reboot_kp = {
     .pre_handler = reboot_handler_pre,
 };
 
+static bool reboot_kp_registered;
+
+/*
+ * Compat install handshake for a kernel where reboot_kp above is unsafe to
+ * trigger (ksu_kprobe_text_patch_unsafe(), hook/kprobe_patch_compat.h) --
+ * confirmed on hardware to crash exactly the way syscall_regfunc's
+ * kretprobe does: the BRK write lands and verifies clean, but the CPU
+ * still faults fetching it, before reboot_handler_pre ever runs (PC at the
+ * probed symbol's own address+0).
+ *
+ * Keeps reboot(2) as the install-handshake syscall exactly as userspace
+ * already calls it -- the difference is *how* the hook goes in.
+ * reboot_kp's crash is about *executing a newly injected instruction* in
+ * already-existing, protected .text. Overwriting
+ * sys_call_table[__NR_reboot]'s pointer is a different kind of write -- a
+ * data write in a table, redirecting to code that already exists and
+ * already executes fine (this module's own), never injecting a single new
+ * instruction into anything. Confirmed on hardware: ksud's own,
+ * completely unmodified reboot(2) call gets a live driver version through
+ * this path. (An earlier prctl(2)-based LSM-hook fallback was also built
+ * and verified working, but is not needed -- this keeps the existing
+ * reboot(2) wire protocol intact, which the prctl(2) path could not.)
+ */
+static syscall_fn_t real_reboot_fn;
+static bool reboot_table_hooked;
+
+static long ksu_reboot_table_replacement(const struct pt_regs *regs)
+{
+    int magic1 = (int)PT_REGS_PARM1(regs);
+    int magic2 = (int)PT_REGS_PARM2(regs);
+
+    if (magic1 == (int)KSU_INSTALL_MAGIC1 && magic2 == (int)KSU_INSTALL_MAGIC2) {
+        unsigned long arg4 = (unsigned long)PT_REGS_SYSCALL_PARM4(regs);
+        int fd = ksu_install_fd();
+
+        pr_info("[%d] install ksu fd (table-hook compat): %d\n", current->pid, fd);
+        if (copy_to_user((int __user *)arg4, &fd, sizeof(fd))) {
+            pr_err("install ksu fd reply err (table-hook compat)\n");
+            ksu_close_fd(fd);
+        }
+        return 0;
+    }
+
+    return real_reboot_fn(regs);
+}
+
 void __init ksu_supercalls_init(void)
 {
     int rc;
 
     ksu_supercall_dump_commands();
 
+    if (ksu_kprobe_text_patch_unsafe() && ksu_syscall_table) {
+        ksu_syscall_table_hook(__NR_reboot, (syscall_fn_t)ksu_reboot_table_replacement, &real_reboot_fn);
+        pr_info("reboot table-hook compat installed (reboot kprobe unsafe on this kernel)\n");
+        reboot_table_hooked = true;
+        return;
+    }
+
     rc = register_kprobe(&reboot_kp);
     if (rc) {
         pr_err("reboot kprobe failed: %d\n", rc);
-    } else {
-        pr_info("reboot kprobe registered successfully\n");
+        return;
     }
+    pr_info("reboot kprobe registered successfully\n");
+    reboot_kp_registered = true;
 }
 
 void __exit ksu_supercalls_exit(void)
 {
-    unregister_kprobe(&reboot_kp);
+    if (reboot_table_hooked)
+        ksu_syscall_table_unhook(__NR_reboot);
+    if (reboot_kp_registered)
+        unregister_kprobe(&reboot_kp);
     ksu_supercall_cleanup_state();
 }

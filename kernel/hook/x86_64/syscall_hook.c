@@ -14,10 +14,6 @@
 sys_call_ptr_t *ksu_syscall_table = NULL;
 int ksu_dispatcher_nr = -1;
 
-#ifndef __NR_syscalls
-#define __NR_syscalls (__NR_syscall_max + 1)
-#endif
-
 // Hook registration table — read with READ_ONCE from tracepoint/dispatcher
 // context, written with WRITE_ONCE from init/exit context.
 static ksu_syscall_hook_fn syscall_hooks[__NR_syscalls];

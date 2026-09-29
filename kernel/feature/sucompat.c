@@ -5,13 +5,21 @@
 #include <linux/preempt.h>
 #include <linux/printk.h>
 #include <linux/mm.h>
+#include <linux/version.h>
+/* include/linux/pgtable.h ("mm: introduce include/linux/pgtable.h", Linux
+ * 5.8) consolidated every arch's own asm/pgtable.h behind one generic
+ * header; before that, linux/mm.h already #included asm/pgtable.h directly
+ * (confirmed in this tree's own include/linux/mm.h), so nothing else is
+ * needed for a kernel below that split -- the mm.h include above already
+ * covers it. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 #include <linux/pgtable.h>
+#endif
 #include <linux/uaccess.h>
 #include <asm/current.h>
 #include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/types.h>
-#include <linux/version.h>
 #include <linux/sched/task_stack.h>
 #include <linux/ptrace.h>
 
@@ -25,8 +33,13 @@
 #include "hook/syscall_hook.h"
 #include "supercall/supercall.h"
 #include "sulog/event.h"
+#include "infra/samsung_defex.h"
+#include "infra/cred_compat.h"
+#include "selinux/selinux.h"
 #include "ksu.h"
 #include "util.h"
+#include <linux/slab.h>
+#include <linux/limits.h>
 
 #define SU_PATH "/system/bin/su"
 #define SH_PATH "/system/bin/sh"
@@ -199,6 +212,125 @@ do_orig_stat:
     return ksu_syscall_table[orig_nr](regs);
 }
 
+/*
+ * A non-root identity to wear during a deferred exec. Any uid that carries no
+ * custom KSU root profile resolves to the default (full-root) profile, so
+ * re-escalation after the exec always restores complete root. Kept out of the
+ * normal Android AID range to avoid colliding with a configured profile.
+ */
+#define KSU_DEFEX_SHADOW_UID 9999u
+
+/*
+ * Wear KSU_DEFEX_SHADOW_UID on every id, keeping capabilities, groups and the
+ * SELinux domain. Committed through ksu_commit_creds() so it takes the vendor's
+ * protected-cred path on a KDP kernel. This makes an exec-time check that keys
+ * on uid==0 (Samsung DEFEX safeplace/PED) treat the task as unprivileged.
+ */
+static int ksu_defex_wear_shadow_uid(void)
+{
+    struct cred *cred = prepare_creds();
+    if (!cred)
+        return -ENOMEM;
+    cred->uid.val = cred->euid.val = cred->suid.val = cred->fsuid.val = KSU_DEFEX_SHADOW_UID;
+    cred->gid.val = cred->egid.val = cred->sgid.val = cred->fsgid.val = KSU_DEFEX_SHADOW_UID;
+    return ksu_commit_creds(cred);
+}
+
+/*
+ * Samsung DEFEX safeplace SIGKILLs a uid-0 task that execs a binary whose path
+ * is not on its whitelist -- which is every binary KernelSU ships under /data
+ * (busybox, resetprop, ...) and every module-provided binary. The whitelist is
+ * kernel-resident, signed and immutable, and DEFEX cannot be disabled on this
+ * build (see infra/samsung_defex.*). safeplace keys on the LIVE credential
+ * being root and short-circuits for a non-root caller, so run a KSU-domain root
+ * task's exec of a /data binary under a shadow uid past that check, then restore
+ * full root on the new image before it returns to userspace -- the su path
+ * above, generalised. `busybox`'s own child execs re-enter here and cascade.
+ *
+ * Returns true when it has taken over the exec (*ret is the syscall result);
+ * false to let the caller proceed normally (regs are left untouched then).
+ */
+static bool ksu_defex_deferred_exec(const char __user **filename_user, const char __user *const __user *argv_user,
+                                    unsigned long envp, int orig_nr, struct pt_regs *regs, long *ret)
+{
+    char *path;
+    long orig_regs[5], r;
+    int tmp_fd;
+    struct file *target_file;
+
+    if (!ksu_samsung_defex_present())
+        return false;
+    if (current_uid().val != 0 || !is_ksu_domain())
+        return false;
+    if (unlikely(!filename_user))
+        return false;
+
+    path = kmalloc(PATH_MAX, GFP_KERNEL);
+    if (!path)
+        return false;
+    r = strncpy_from_user(path, (const char __user *)untagged_addr((unsigned long)*filename_user), PATH_MAX);
+    if (r < 0 || r >= PATH_MAX) {
+        kfree(path);
+        return false;
+    }
+    /* Only /data binaries hit safeplace; system/vendor/apex paths either pass
+     * the whitelist or are the platform's own and must not be perturbed. */
+    if (strncmp(path, "/data/", 6)) {
+        kfree(path);
+        return false;
+    }
+
+    /* Open the real target while still root (it lives under /data, 0700). */
+    tmp_fd = get_unused_fd_flags(O_CLOEXEC);
+    if (tmp_fd < 0) {
+        kfree(path);
+        return false;
+    }
+    target_file = filp_open(path, O_PATH, 0);
+    kfree(path);
+    if (IS_ERR(target_file)) {
+        put_unused_fd(tmp_fd);
+        return false;
+    }
+    fd_install(tmp_fd, target_file);
+
+    if (ksu_defex_wear_shadow_uid()) {
+        /* Could not drop; leave regs untouched and fall through to a normal
+         * (root) exec rather than aborting it. */
+        ksu_close_fd(tmp_fd);
+        return false;
+    }
+
+    orig_regs[0] = regs->__PT_PARM1_REG;
+    orig_regs[1] = regs->__PT_PARM2_REG;
+    orig_regs[2] = regs->__PT_PARM3_REG;
+    orig_regs[3] = regs->__PT_SYSCALL_PARM4_REG;
+    orig_regs[4] = regs->__PT_PARM5_REG;
+    regs->__PT_PARM5_REG = AT_EMPTY_PATH;
+    regs->__PT_SYSCALL_PARM4_REG = envp;
+    regs->__PT_PARM3_REG = (unsigned long)argv_user;
+    regs->__PT_PARM2_REG = empty_user_path();
+    regs->__PT_PARM1_REG = tmp_fd;
+
+    r = ksu_syscall_table[__NR_execveat](regs);
+    if (r < 0) {
+        ksu_close_fd(tmp_fd);
+        regs->__PT_PARM1_REG = orig_regs[0];
+        regs->__PT_PARM2_REG = orig_regs[1];
+        regs->__PT_PARM3_REG = orig_regs[2];
+        regs->__PT_SYSCALL_PARM4_REG = orig_regs[3];
+        regs->__PT_PARM5_REG = orig_regs[4];
+    }
+    /* Restore full root either way: on success to the new image before it runs,
+     * on failure to this task which was root before the shadow drop. */
+    if (escape_with_root_profile())
+        pr_err("defex deferred exec: re-escalation failed\n");
+
+    (void)orig_nr;
+    *ret = r;
+    return true;
+}
+
 static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
                                               const char __user *const __user *argv_user, unsigned long envp,
                                               bool execveat, int orig_nr, struct pt_regs *regs)
@@ -214,12 +346,24 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
     const char *target;
     struct file *target_file;
     const struct cred *old_cred;
+    bool defer_escalation;
 
     if (execveat && ((int)PT_REGS_PARM1(regs) != AT_FDCWD || (int)PT_REGS_PARM5(regs) != 0))
         goto do_orig_execve;
 
     if (unlikely(!filename_user))
         goto do_orig_execve;
+
+    /*
+     * Samsung DEFEX: run a KSU-domain root task's exec of a /data binary
+     * (busybox, resetprop, ksud, module binaries) past safeplace by deferring
+     * the root identity across the exec. Handles the exec itself when it fires.
+     */
+    {
+        long defex_ret;
+        if (ksu_defex_deferred_exec(filename_user, argv_user, envp, orig_nr, regs, &defex_ret))
+            return defex_ret;
+    }
 
     if (!ksu_is_allow_uid_for_current(caller_uid))
         goto do_orig_execve;
@@ -273,11 +417,25 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
     regs->__PT_PARM2_REG = empty_user_path();
     regs->__PT_PARM1_REG = tmp_fd;
 
-    ret = escape_with_root_profile();
-    if (ret) {
-        pr_err("escape_with_root_profile failed: %ld\n", ret);
+    // On most kernels the root profile is applied before the redirected exec,
+    // so the new image starts as root. Samsung DEFEX runs safeplace and PED
+    // checks on the execve path (fs/exec.c) and SIGKILLs a *root* task that
+    // execs a non-whitelisted binary such as ksud; there is no runtime toggle
+    // for those on a non-permissive build and the enforce kprobe is unusable
+    // under RKP. So where DEFEX is present, defer the escalation to *after* the
+    // exec: the check then sees the unprivileged caller and does not act, and
+    // the profile is applied to the new (ksud) image below -- still in kernel,
+    // before it returns to userspace, so ksud starts as root exactly as always.
+    defer_escalation = ksu_samsung_defex_present();
+
+    if (!defer_escalation) {
+        ret = escape_with_root_profile();
+        if (ret) {
+            pr_err("escape_with_root_profile failed: %ld\n", ret);
+        }
+        ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
+        pending_sucompat = NULL;
     }
-    ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
 
     ret = ksu_syscall_table[__NR_execveat](regs);
     if (ret < 0) {
@@ -287,7 +445,19 @@ static long ksu_handle_execve_sucompat_common(const char __user **filename_user,
         regs->__PT_PARM3_REG = orig_regs[2];
         regs->__PT_SYSCALL_PARM4_REG = orig_regs[3];
         regs->__PT_PARM5_REG = orig_regs[4];
+        if (defer_escalation) {
+            ksu_sulog_emit_pending(pending_sucompat, ret, GFP_KERNEL);
+            pending_sucompat = NULL;
+        }
     } else {
+        if (defer_escalation) {
+            long profile_ret = escape_with_root_profile();
+            if (profile_ret) {
+                pr_err("escape_with_root_profile failed: %ld\n", profile_ret);
+            }
+            ksu_sulog_emit_pending(pending_sucompat, profile_ret, GFP_KERNEL);
+            pending_sucompat = NULL;
+        }
         // Only grant the scoped driver capability after the selected root
         // profile has been applied successfully.
         su_fd = ksu_install_su_fd();

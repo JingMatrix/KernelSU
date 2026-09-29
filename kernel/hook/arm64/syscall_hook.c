@@ -7,6 +7,7 @@
 #include <asm/cacheflush.h>
 #include "infra/symbol_resolver.h"
 #include "../patch_memory.h"
+#include "../kprobe_patch_compat.h"
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
 
@@ -208,6 +209,20 @@ void __init ksu_syscall_hook_init(void)
 
     if (!ksu_syscall_table)
         return;
+
+    if (ksu_kprobe_text_patch_unsafe()) {
+        // The ni_slot write below is a plain data write and is not itself
+        // the problem (confirmed elsewhere: sys_call_table[__NR_reboot] can
+        // be safely overwritten on exactly this kind of platform,
+        // supercall/supercall.c). The dispatcher is skipped because using
+        // it requires register_trace_prio_sys_enter(), which as the first
+        // tracepoint consumer arms a kretprobe on syscall_regfunc -- one of
+        // the two confirmed-unsafe kprobe targets kprobe_patch_compat.h
+        // documents.
+        pr_info(
+            "kprobe-based syscall dispatch unsafe on this boot; leaving ksu_dispatcher_nr unset for the direct fallback\n");
+        return;
+    }
 
     // Find one ni_syscall slot for the dispatcher
     if (ksu_find_ni_syscall_slots(&ni_slot, 1) < 1) {

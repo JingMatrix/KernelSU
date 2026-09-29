@@ -1,9 +1,15 @@
 #ifndef __KSU_H_KSU_SYSCALL_HOOK
 #define __KSU_H_KSU_SYSCALL_HOOK
 #include <asm/syscall.h>
+#include <asm/unistd.h>
 
 #if defined(__x86_64__)
 typedef sys_call_ptr_t syscall_fn_t;
+
+// x86_64 headers only expose the highest syscall number, not the count.
+#ifndef __NR_syscalls
+#define __NR_syscalls (__NR_syscall_max + 1)
+#endif
 #endif
 
 extern syscall_fn_t *ksu_syscall_table;

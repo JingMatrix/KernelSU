@@ -28,6 +28,8 @@
 #include "feature/ptctl.h"
 #include "feature/uhook.h"
 #include "infra/symbol_resolver.h"
+#include "infra/samsung_compat.h"
+#include "infra/samsung_defex.h"
 
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
 #include <asm/cpufeature.h>
@@ -134,6 +136,8 @@ int __init kernelsu_init(void)
     }
 
     ksu_init_symbol_resolver();
+    ksu_samsung_compat_probe();
+    ksu_samsung_defex_init();
     ksu_syscall_hook_init();
 
     ksu_feature_init();
@@ -205,6 +209,7 @@ void __exit kernelsu_exit(void)
     // point at module text and must be torn down before it is freed.
     ksu_uhook_exit();
     ksu_ptctl_exit();
+    ksu_samsung_defex_exit();
 
     ksu_supercalls_exit();
 
