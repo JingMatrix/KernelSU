@@ -14,6 +14,7 @@
 #include "asm/cacheflush.h"
 #include "asm-generic/fixmap.h"
 #include "util.h" // IWYU pragma: keep (copy_to_kernel_nofault compat)
+#include "infra/samsung_compat.h"
 
 // https://github.com/fuqiuluo/ovo/blob/f7da411458e87d32438dc14fce5a3313ed0c967e/ovo/mmuhack.c#L21
 
@@ -75,10 +76,10 @@ unsigned long phys_from_virt(unsigned long addr, int *err)
         goto fail;
 
     pmd = pmd_offset(pud, addr);
-    pr_debug("pmd of 0x%lx p=0x%lx v=0x%lx", addr, (uintptr_t)pmd, (uintptr_t)pmd_val(*pmd));
     if (pmd_none(*pmd))
         goto fail;
-        /* Same reasoning as the PUD case just above, and the same fix: check
+    pr_debug("pmd of 0x%lx p=0x%lx v=0x%lx", addr, (uintptr_t)pmd, (uintptr_t)pmd_val(*pmd));
+    /* Same reasoning as the PUD case just above, and the same fix: check
      * the huge/section mapping before pmd_bad(), not after. */
 #if defined(pmd_leaf)
     if (pmd_leaf(*pmd)) {
@@ -219,6 +220,16 @@ int ksu_patch_text(void *dst, void *src, size_t len, int flags)
         .cpu_count = ATOMIC_INIT(0),
         .flags = flags,
     };
+
+#ifndef CONFIG_KSU_STATIC_PATCH_LANDS
+    /* See the comment above the declaration: on most RKP/KDP builds this
+     * store cannot land, and a hypervisor that answers by trapping it takes
+     * the halted CPUs with it. */
+    if (ksu_samsung_uh_present()) {
+        pr_info_once("patch_text: not attempted, RKP/KDP holds the static mappings\n");
+        return -EPERM;
+    }
+#endif
 
     return stop_machine(ksu_patch_text_cb, &info, cpu_online_mask);
 }

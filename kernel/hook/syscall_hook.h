@@ -1,9 +1,15 @@
 #ifndef __KSU_H_KSU_SYSCALL_HOOK
 #define __KSU_H_KSU_SYSCALL_HOOK
 #include <asm/syscall.h>
+#include <asm/unistd.h>
 
 #if defined(__x86_64__)
 typedef sys_call_ptr_t syscall_fn_t;
+
+// x86_64 headers only expose the highest syscall number, not the count.
+#ifndef __NR_syscalls
+#define __NR_syscalls (__NR_syscall_max + 1)
+#endif
 #elif defined(__riscv)
 typedef long (*syscall_fn_t)(const struct pt_regs *);
 #endif
@@ -39,7 +45,11 @@ bool ksu_has_syscall_hook(int nr);
 // Saves the original handler to *@old (if non-NULL) and records the entry
 // for restoration at module exit. Use this for boot-time hooks that replace
 // a real syscall entry (e.g. ksud hooking __NR_execve/__NR_read/__NR_fstat).
-void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old);
+// Returns 0 once the slot holds `fn`, or a negative error when the write was
+// refused. A platform that protects the page this table lives in does refuse
+// it, so a caller that has a second way to install its hook has to look at
+// this rather than assume the slot changed.
+int ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old);
 
 // Restore syscall_table[@nr] to its original value recorded by
 // ksu_syscall_table_hook(), and remove the entry from the tracking list.

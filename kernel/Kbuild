@@ -15,6 +15,8 @@ kernelsu-objs += hook/lsm_hook.o
 kernelsu-objs += hook/setuid_hook.o
 kernelsu-objs += hook/syscall_event_bridge.o
 kernelsu-objs += hook/syscall_hook_manager.o
+kernelsu-objs += hook/syscall_hook_direct.o
+kernelsu-objs += hook/kprobe_patch_compat.o
 kernelsu-objs += hook/tp_marker.o
 ifeq ($(CONFIG_ARM64),y)
 kernelsu-objs += hook/arm64/patch_memory.o
@@ -32,6 +34,9 @@ kernelsu-objs += infra/event_queue.o
 kernelsu-objs += infra/seccomp_cache.o
 kernelsu-objs += infra/su_mount_ns.o
 kernelsu-objs += infra/symbol_resolver.o
+kernelsu-objs += infra/cred_compat.o
+kernelsu-objs += infra/samsung_compat.o
+kernelsu-objs += infra/samsung_defex.o
 
 ifneq ($(CONFIG_KSU_DISABLE_MANAGER),y)
 kernelsu-objs += manager/apk_sign.o
@@ -74,6 +79,12 @@ ccflags-y += -DCONFIG_KSU_DEBUG=1
 endif
 ifeq ($(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER),y)
 ccflags-y += -DCONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER=1
+endif
+ifeq ($(CONFIG_KSU_KPROBE_TEXT_PATCH_UNSAFE),y)
+ccflags-y += -DCONFIG_KSU_KPROBE_TEXT_PATCH_UNSAFE=1
+endif
+ifeq ($(CONFIG_KSU_STATIC_PATCH_LANDS),y)
+ccflags-y += -DCONFIG_KSU_STATIC_PATCH_LANDS=1
 endif
 endif
 

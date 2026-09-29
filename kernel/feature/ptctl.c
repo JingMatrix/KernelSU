@@ -113,6 +113,12 @@ static task_call_func_t p_task_call_func;
 static valid_user_regs_t p_valid_user_regs;
 #endif
 
+/* Every function below that calls through one of the pointers above is
+ * __nocfi, and has to be -- see infra/symbol_resolver.h for why, and for what
+ * the attribute does and does not cover. Omitting it on one of them makes that
+ * supercall a reboot on any CFI-enforcing kernel, not a failure it can report.
+ */
+
 /* --- killguard state: protected tgids --- */
 static DEFINE_SPINLOCK(guard_lock);
 static pid_t guard_tgids[PTCTL_MAX_GUARD];
@@ -397,7 +403,7 @@ static bool sig_kp_registered;
  */
 static DEFINE_MUTEX(killguard_lock);
 
-static void killguard_register(void)
+static void __nocfi killguard_register(void)
 {
     if (!p_register_kprobe || !p_unregister_kprobe)
         return;
@@ -429,7 +435,7 @@ static bool killguard_ensure(void)
 }
 
 /* --- task lookup helper: returns a referenced task or NULL --- */
-static struct task_struct *get_task(pid_t pid)
+static __nocfi struct task_struct *get_task(pid_t pid)
 {
     struct task_struct *task = NULL;
     if (!p_find_task_by_vpid)
@@ -443,7 +449,7 @@ static struct task_struct *get_task(pid_t pid)
 }
 
 /* --- memory read/write via access_process_vm (chunked by userspace) --- */
-static long do_peek(struct ksu_ptctl_cmd *c, bool write)
+static long __nocfi do_peek(struct ksu_ptctl_cmd *c, bool write)
 {
     struct task_struct *task;
     void *kbuf;
@@ -569,9 +575,13 @@ struct ksu_regs_xfer {
     bool write;
 };
 
+/* Defined with the hold-breakpoint state it reads, far below. */
+static bool ksu_regs_hold_pinned(struct task_struct *task);
+
 /*
- * Runs under task_call_func(), i.e. with the target's pi_lock held and IRQs
- * disabled. It must not sleep; a 272-byte struct copy is fine.
+ * Runs under task_call_func() where that exists, i.e. with the target's pi_lock held
+ * and IRQs disabled, and bare on a kernel without it -- so it must hold to the
+ * stricter contract either way. It must not sleep; a 272-byte struct copy is fine.
  */
 static int ksu_regs_xfer_cb(struct task_struct *p, void *arg)
 {
@@ -623,6 +633,22 @@ static int ksu_regs_xfer_cb(struct task_struct *p, void *arg)
     return 0;
 }
 
+/*
+ * One register transfer, by whichever pin this kernel offers.
+ *
+ * task_call_func() runs the callback with the target's rq lock held, which stops an
+ * arbitrary task being scheduled mid-copy. Where it does not exist the callback is run
+ * bare -- sound only because do_regs() has established that this task is one of the two
+ * that need no pin, and because the callback makes its own TASK_RUNNING/on_rq check and
+ * refuses with -EBUSY if that stops being true.
+ */
+static long ksu_regs_commit(struct task_struct *task, struct ksu_regs_xfer *a)
+{
+    if (p_task_call_func)
+        return p_task_call_func(task, ksu_regs_xfer_cb, a);
+    return ksu_regs_xfer_cb(task, a);
+}
+
 static long __nocfi do_regs(struct ksu_ptctl_cmd *c, bool write)
 {
     struct task_struct *task;
@@ -636,10 +662,6 @@ static long __nocfi do_regs(struct ksu_ptctl_cmd *c, bool write)
      * than a silent 64-byte overrun of the kernel-private tail. */
     if (c->len && c->len != KSU_UREGS_SZ)
         return -EINVAL;
-    /* Without task_call_func() there is no way to pin the target off-CPU, and
-     * an unpinned frame is neither safe to write nor meaningful to read. */
-    if (!p_task_call_func)
-        return -ENOSYS;
 
     task = get_task(c->pid);
     if (!task)
@@ -669,6 +691,30 @@ static long __nocfi do_regs(struct ksu_ptctl_cmd *c, bool write)
         put_task_struct(task);
         return -ESRCH;
     }
+    /* task_call_func() is v5.16 and later (see the symbol notes at the top of this
+     * file). Before it there is no symbol this module is willing to depend on that pins
+     * an ARBITRARY task off-CPU: task_rq_lock() is in kallsyms on every target measured,
+     * but its task_rq_unlock() counterpart is a static inline, so leaning on it would
+     * mean open-coding the unlock against struct rq and task_struct::pi_lock offsets --
+     * a per-KMI offset dependency for one ioctl. An unpinned frame is neither safe to
+     * write nor meaningful to read, but two tasks need no pin, and one of them is the
+     * only task the hold-breakpoint path ever writes:
+     *
+     *   - a thread this module is itself holding parked (see ksu_regs_hold_pinned);
+     *   - the calling thread, reading its own entry frame, which the header already
+     *     documents as answered without the pin (a write to it is refused above).
+     *
+     * So an older kernel loses SETREGS on a task of the caller's choosing and keeps
+     * it for a parked one, which is what the uapi header's "a thread parked by
+     * HWBP_WAIT always qualifies" promises. A Samsung A528B on 5.4.254 is the device
+     * this is for: every other symbol ptctl wants is in its kallsyms, so SETREGS
+     * alone answered -ENOSYS and the whole ptrace-free path was unusable on an
+     * otherwise complete driver.
+     */
+    if (!p_task_call_func && task != current && !ksu_regs_hold_pinned(task)) {
+        ret = -ENOSYS;
+        goto out;
+    }
     regs = task_pt_regs(task);
     a.regs = regs;
     a.buf = &buf;
@@ -684,7 +730,7 @@ static long __nocfi do_regs(struct ksu_ptctl_cmd *c, bool write)
         ret = ksu_sanitise_user_regs(&buf, regs, task);
         if (ret)
             goto out;
-        ret = p_task_call_func(task, ksu_regs_xfer_cb, &a);
+        ret = ksu_regs_commit(task, &a);
         if (ret)
             goto out;
     } else if (task == current) {
@@ -702,7 +748,7 @@ static long __nocfi do_regs(struct ksu_ptctl_cmd *c, bool write)
     } else {
         /* Read under the same pin, so the caller gets -EBUSY instead of a
          * torn or stale frame from a thread that is still running. */
-        ret = p_task_call_func(task, ksu_regs_xfer_cb, &a);
+        ret = ksu_regs_commit(task, &a);
         if (ret)
             goto out;
         if (copy_to_user((void __user *)(uintptr_t)c->uptr, &buf, KSU_UREGS_SZ)) {
@@ -739,7 +785,7 @@ static long do_info(struct ksu_ptctl_cmd *c)
     return 0;
 }
 
-static long do_sigsend(struct ksu_ptctl_cmd *c)
+static long __nocfi do_sigsend(struct ksu_ptctl_cmd *c)
 {
     struct task_struct *task;
     int sig = (int)c->arg1;
@@ -815,6 +861,11 @@ static struct completion hwbp_gone; /* hwbp_hold_fn() has left module text */
 static struct pt_regs hwbp_regs;
 static pid_t hwbp_tid;
 static struct task_struct *hwbp_held;
+/* The held thread, published only while it is actually blocked in hwbp_hold_fn()'s
+ * wait. hwbp_held stays set across the whole wake-up path -- resume-step work first,
+ * the clear last -- so it cannot answer "is this frame still stable"; this can. Read
+ * it through ksu_regs_hold_pinned(). */
+static struct task_struct *hwbp_parked;
 static atomic_t hwbp_busy = ATOMIC_INIT(0);
 static struct callback_head hwbp_work;
 /* Hits thrown away because a hold was already in progress, or because the
@@ -859,6 +910,33 @@ static atomic_t hwbp_missed = ATOMIC_INIT(0);
 #if defined(CONFIG_BPF_SYSCALL) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
 #define KSU_HAVE_ORIG_OVERFLOW_HANDLER 1
 #endif
+
+/*
+ * Whether this task's user frame is stable without task_call_func().
+ *
+ * True for one task: the thread this module is itself holding parked on the
+ * hold-breakpoint, for as long as it is blocked in hwbp_hold_fn()'s
+ * wait_for_completion_interruptible(&hwbp_release). Nothing but HWBP_RELEASE or a
+ * signal can put it back on a CPU, and hwbp_parked is cleared the moment that wait
+ * returns -- before any of hwbp_hold_fn()'s resume work, which includes a second
+ * off-runqueue sleep. hwbp_held is no good for this: it is cleared only at the very
+ * end of that path, so it still names a thread that has already been woken.
+ *
+ * Off-the-runqueue is checked too, not assumed from hwbp_parked: hwbp_hold_fn()
+ * publishes the park immediately before it blocks and is still TASK_RUNNING in
+ * between, which is the window hwbp_wait() spins over.
+ *
+ * Without a pin this stays a check-then-act test, and the gap is real but narrow: a
+ * signal delivered after the check makes the target runnable while a copy is in
+ * flight. The cost is bounded to a lost SETREGS or a torn GETREGS -- the frame itself
+ * cannot go away, since do_regs() holds a try_get_task_stack() reference across the
+ * whole transfer -- and a signalled thread's frame is about to be rewritten by
+ * do_signal() anyway. Closing it outright needs the rq lock, i.e. task_call_func().
+ */
+static bool ksu_regs_hold_pinned(struct task_struct *task)
+{
+    return task && READ_ONCE(hwbp_parked) == task && !ksu_task_is_running(task) && !task->on_rq;
+}
 
 static void hwbp_mark_default_step(struct perf_event *bp)
 {
@@ -931,9 +1009,15 @@ static void hwbp_hold_fn(struct callback_head *cb)
      * commit gate requires. Completing it from the debug exception would let
      * HWBP_WAIT return while the target is still TASK_RUNNING, and the
      * SETREGS that the caller is documented to issue next would race it. */
+    WRITE_ONCE(hwbp_parked, current);
     complete(&hwbp_hit);
 
     wait_for_completion_interruptible(&hwbp_release); /* pause here until released */
+
+    /* Retract it first thing on the way out, however this wait ended: everything
+     * below can sleep and be rescheduled, so the frame stops being stable here and
+     * not at the hwbp_held clear further down. */
+    WRITE_ONCE(hwbp_parked, NULL);
 
     if (manual) {
         /* Force at least one sched-out/sched-in so hw_breakpoint_control()
@@ -984,7 +1068,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data, s
     /* hwbp_hit is completed from hwbp_hold_fn(), once the thread has parked. */
 }
 
-static long hwbp_set(struct ksu_ptctl_cmd *c, u64 addr, pid_t tgid)
+static long __nocfi hwbp_set(struct ksu_ptctl_cmd *c, u64 addr, pid_t tgid)
 {
     struct task_struct *leader, *t, **tasks;
     struct perf_event_attr attr;
@@ -1113,7 +1197,7 @@ static long hwbp_set(struct ksu_ptctl_cmd *c, u64 addr, pid_t tgid)
     return 0;
 }
 
-static void hwbp_clear(void)
+static void __nocfi hwbp_clear(void)
 {
     int i;
 
@@ -1181,7 +1265,7 @@ static long hwbp_wait(struct ksu_ptctl_cmd *c)
             for (i = 0; i < 200; i++) { /* ~20ms worst case */
                 if (!READ_ONCE(hwbp_held))
                     break; /* released or aborted already */
-                if (!ksu_task_is_running(held) && !held->on_rq)
+                if (ksu_regs_hold_pinned(held))
                     break;
                 usleep_range(50, 150);
             }
@@ -1189,9 +1273,11 @@ static long hwbp_wait(struct ksu_ptctl_cmd *c)
         }
         /* The park is an interruptible sleep and hwbp_hold_fn() publishes the
          * hit just before blocking, so a signal already pending on the hitting
-         * thread ends the hold before it ever parks. Report that rather than
-         * letting the caller assume a thread it can inspect. */
-        c->arg1 = READ_ONCE(hwbp_held) ? 1 : 0;
+         * thread ends the hold before it ever parks. Report that rather than letting
+         * the caller assume a thread it can inspect -- uapi/supercall.h calls arg1 the
+         * parked flag, which is the same question GETREGS/SETREGS ask on a kernel
+         * without task_call_func(), so answer it with the same test. */
+        c->arg1 = ksu_regs_hold_pinned(held) ? 1 : 0;
     }
     if (c->uptr) {
         /* Same length contract as GETREGS. This used to clamp to c->len, so a
@@ -1283,7 +1369,8 @@ void ksu_ptctl_init(void)
         pr_info("ptctl: valid_user_regs unavailable, using the in-module copy\n");
 #endif
     if (!p_task_call_func)
-        pr_info("ptctl: task_call_func unavailable, SETREGS restricted to off-CPU tasks\n");
+        pr_info("ptctl: task_call_func unavailable (pre-5.16), GETREGS/SETREGS on another "
+                "thread restricted to one parked by HWBP_WAIT\n");
     if (!p_perf_event_output_forward)
         pr_info("ptctl: perf_event_output_forward unavailable, hwbp uses the manual step path\n");
 
@@ -1295,7 +1382,7 @@ void ksu_ptctl_init(void)
             !!p_access_process_vm, !!p_register_kprobe, !!p_reg_hwbp, !!p_put_task_stack);
 }
 
-void ksu_ptctl_exit(void)
+void __nocfi ksu_ptctl_exit(void)
 {
     hwbp_clear();
     guard_clear();

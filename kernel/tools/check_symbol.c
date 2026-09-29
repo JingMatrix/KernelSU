@@ -147,22 +147,30 @@ int main(int argc, char *argv[])
     }
 
     /* An empty __versions section is what a CONFIG_MODVERSIONS=n target
-     * (every GKI KMI this project otherwise builds for) always produces,
-     * so a non-empty one usually does mean a real build mismatch worth
-     * failing on. But on a CONFIG_MODVERSIONS=y target modpost populates a
-     * CRC entry for every referenced symbol vmlinux happens to export one
-     * for -- normal, unavoidable behavior of that base kernel config, not a
-     * sign anything is wrong -- so it is a warning here, not a hard error:
-     * ksuinit::load_module() (ksud's own insmod/late-load loader) resolves
-     * every symbol manually against live kallsyms at insmod time and never
-     * reads this section at all, so its content cannot affect whether the
-     * module actually loads. The check that matters either way is below:
-     * every undefined symbol this module references must actually exist,
-     * defined and global/weak, in vmlinux. */
+     * always produces, so this reports a non-empty one. On a
+     * CONFIG_MODVERSIONS=y target it is instead expected: modpost populates a
+     * CRC entry for every referenced symbol vmlinux exports one for, which is
+     * that base kernel config working normally. Hence a note rather than an
+     * error.
+     *
+     * It is NOT evidence the section is inert. The kernel reads it:
+     * check_version() compares each entry against its own CRC and
+     * check_modstruct_version() does so for module_layout, so a stale entry
+     * there is a refused load (-ENOEXEC) and a silenced one is worse than
+     * that. What this tool cannot judge is whether the entries agree with the
+     * kernel the module will be loaded into, because the vmlinux it is handed
+     * is the one the module was just built against, where they agree by
+     * construction. Comparing against the target kernel is a separate step
+     * that needs a reference from that kernel.
+     *
+     * The check that follows is the one this tool can make: every undefined
+     * symbol the module references must exist, defined and global or weak, in
+     * vmlinux. */
     if (ko_version_sec->sh_size != 0) {
         fprintf(stderr,
-                "Warning: __versions section in %s has size %llu (expected 0 -- harmless on a "
-                "CONFIG_MODVERSIONS=y target, since ksuinit's loader never reads it)\n",
+                "Note: __versions section in %s has size %llu -- expected on a "
+                "CONFIG_MODVERSIONS=y target; whether its CRCs match the TARGET kernel is "
+                "not checked here\n",
                 ko_path, (unsigned long long)ko_version_sec->sh_size);
     }
 

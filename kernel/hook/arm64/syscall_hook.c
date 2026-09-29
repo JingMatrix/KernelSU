@@ -7,6 +7,7 @@
 #include <asm/cacheflush.h>
 #include "infra/symbol_resolver.h"
 #include "../patch_memory.h"
+#include "infra/samsung_compat.h"
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
 
@@ -43,18 +44,34 @@ static int patch_syscall_table(int nr, syscall_fn_t fn)
         return -EIO;
     }
 
+    // Read back rather than trust the write. ksu_patch_text() reports a
+    // refusal that FAULTS, because copy_to_kernel_nofault() returns -EFAULT
+    // for one; a platform that drops the write instead returns success with
+    // the slot unchanged. A caller choosing between two ways to install its
+    // hook would then pick the one that did nothing, so the slot itself is the
+    // answer rather than the write's own verdict.
+    if (READ_ONCE(ksu_syscall_table[nr]) != fn) {
+        // Both values, because this is also how a read-back that is itself
+        // wrong would show: a caller falls back to its other install path on
+        // this verdict, so a false mismatch has to be visible rather than
+        // quietly change which path runs.
+        pr_err("patch syscall %d did not take: slot=0x%lx want=0x%lx\n", nr,
+               (unsigned long)READ_ONCE(ksu_syscall_table[nr]), (unsigned long)fn);
+        return -EIO;
+    }
+
     return 0;
 }
 
 // Direct syscall table patching: overwrite syscall_table[nr] with fn,
 // save original to *old, and record for restoration at module exit.
-void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
+int ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 {
     if (ksu_syscall_table == NULL)
-        return;
+        return -ENOENT;
     if (nr < 0 || nr >= __NR_syscalls) {
         pr_info("invalid nr: %d\n", nr);
-        return;
+        return -EINVAL;
     }
 
     mutex_lock(&hooked_entries_lock);
@@ -63,6 +80,15 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
     if (old)
         *old = orig;
 
+    int ret = patch_syscall_table(nr, fn);
+    if (ret) {
+        mutex_unlock(&hooked_entries_lock);
+        return ret;
+    }
+
+    // Recorded only once the write has taken: an entry naming a slot that was
+    // never changed would have the exit path write a value back over one it
+    // never replaced.
     // Record for later restoration
     int i;
     bool found = false;
@@ -82,9 +108,8 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
         }
     }
 
-    patch_syscall_table(nr, fn);
-
     mutex_unlock(&hooked_entries_lock);
+    return 0;
 }
 
 // Restore syscall_table[nr] to its original value and remove from tracking list.
@@ -208,6 +233,30 @@ void __init ksu_syscall_hook_init(void)
 
     if (!ksu_syscall_table)
         return;
+
+    if (ksu_samsung_uh_present() || ksu_samsung_defex_build_present()) {
+        // The ni_slot write below is a plain data write and is not itself
+        // the problem (confirmed elsewhere: sys_call_table[__NR_reboot] can
+        // be safely overwritten on exactly this kind of platform,
+        // supercall/supercall.c). The dispatcher is skipped because using
+        // it requires register_trace_prio_sys_enter(), which as the first
+        // tracepoint consumer arms a kretprobe on syscall_regfunc -- one of
+        // the two confirmed-unsafe kprobe targets kprobe_patch_compat.h
+        // documents.
+        //
+        // The test is the presence of the protection layer, not
+        // ksu_kprobe_text_patch_unsafe(): that one says whether these
+        // patches have been found to fault on the kernel being built for,
+        // and a kernel that says nothing is assumed to be one where they
+        // work. Here there is nothing to gain from assuming that. The
+        // dispatcher's own target is one of the two measured to fault,
+        // while the five per-syscall kprobes the fallback arms instead were
+        // measured safe on the same hardware and carry the same hooks, so
+        // wherever that layer might be present the dispatcher is a risk
+        // taken for no added reach.
+        pr_info("RKP/KDP or DEFEX present; leaving ksu_dispatcher_nr unset and taking the per-syscall hooks\n");
+        return;
+    }
 
     // Find one ni_syscall slot for the dispatcher
     if (ksu_find_ni_syscall_slots(&ni_slot, 1) < 1) {
