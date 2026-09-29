@@ -15,10 +15,18 @@ $(info -- OUTPUT DIR: $(ODIR))
 $(info -- KMI: $(KMI))
 $(info -- KBUILD_ARGS: $(KBUILD_ARGS))
 
+# compile_commands.json as a native kbuild target (scripts/clang-tools'
+# integration) postdates this project's own minimum supported kernel --
+# request it only when the target tree's own top-level Makefile actually
+# defines the rule, so an older kernel's build does not fail entirely over a
+# missing IDE convenience this Makefile's own compdb: target
+# (generate_compdb.py, below) already covers independently.
+KSU_HAS_COMPILE_COMMANDS := $(shell grep -q "^compile_commands.json:" $(KDIR)/../Makefile 2>/dev/null && echo 1)
+
 .PHONY: all compdb clean format check-format
 
 all: check_symbol
-	$(MAKE) -C $(KDIR) $(KBUILD_ARGS) modules compile_commands.json -j$(shell nproc)
+	$(MAKE) -C $(KDIR) $(KBUILD_ARGS) modules $(if $(KSU_HAS_COMPILE_COMMANDS),compile_commands.json) -j$(shell nproc)
 	./check_symbol $(ODIR)/kernelsu.ko $(KDIR)/vmlinux
 
 compdb:

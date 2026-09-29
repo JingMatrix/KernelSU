@@ -8,6 +8,18 @@
 #include "klog.h" // IWYU pragma: keep
 #include "infra/seccomp_cache.h"
 
+/* The constant-action bitmap cache this mirrors (kernel/seccomp.c's own
+ * struct action_cache/SECCOMP_ARCH_NATIVE_NR) does not exist before Linux
+ * 5.11 ("seccomp: Add bitmap cache of constant allow filter results") --
+ * seccomp filtering on an older kernel always falls through to the BPF
+ * filter itself, so there is no cache to poke a fast-path bit into.
+ * ksu_seccomp_allow_cache()'s only caller (hook/setuid_hook.c) uses it
+ * purely to skip re-evaluating the filter for __NR_reboot on an
+ * already-trusted uid -- a performance optimization, not a correctness
+ * gate -- so a no-op here just means that syscall takes the filter's normal
+ * (slower) path on these kernels, same as every other syscall already does. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 11, 0)
+
 struct action_cache {
     DECLARE_BITMAP(allow_native, SECCOMP_ARCH_NATIVE_NR);
 #ifdef SECCOMP_ARCH_COMPAT
@@ -63,3 +75,19 @@ void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
     }
 #endif
 }
+
+#else /* < 5.11.0: no constant-action cache to touch */
+
+void ksu_seccomp_clear_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter;
+    (void)nr;
+}
+
+void ksu_seccomp_allow_cache(struct seccomp_filter *filter, int nr)
+{
+    (void)filter;
+    (void)nr;
+}
+
+#endif

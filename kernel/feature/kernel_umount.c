@@ -41,14 +41,36 @@ static const struct ksu_feature_handler kernel_umount_handler = {
     .set_handler = kernel_umount_feature_set,
 };
 
+/* path_umount() (unmount an already-resolved struct path, for kernel code
+ * that never had a user-space path string to begin with) was added in Linux
+ * 5.9 alongside path_mount() (su_mount_ns.c's own comment); before that,
+ * the equivalent (do_umount(), taking a struct mount*, i.e. real_mount(path
+ * ->mnt)) is a static function in fs/namespace.c with no public
+ * declaration at all -- unlike every other "internal symbol, resolve it via
+ * kallsyms" case elsewhere in this codebase, calling it would also need
+ * fs/mount.h's real_mount()/struct mount layout, which is fs-internal and
+ * not worth mirroring for what is a root-hiding convenience (unmounting
+ * overlayfs so it does not show in /proc/mounts), not something root itself
+ * depends on. So this is skipped below 5.9, not shimmed. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 extern int path_umount(struct path *path, int flags);
+#endif
 
 static void ksu_umount_mnt(const char *mnt, struct path *path, int flags)
 {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
     int err = path_umount(path, flags);
     if (err) {
         pr_info("umount %s failed: %d\n", mnt, err);
     }
+#else
+    /* path_umount() consumes the path reference its caller holds (same as
+     * every other VFS path-consuming call); skipping it here still has to
+     * drop that reference, or every call leaks one. */
+    (void)mnt;
+    (void)flags;
+    path_put(path);
+#endif
 }
 
 static void try_umount(const char *mnt, int flags)

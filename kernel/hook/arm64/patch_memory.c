@@ -13,6 +13,7 @@
 #include "linux/stop_machine.h"
 #include "asm/cacheflush.h"
 #include "asm-generic/fixmap.h"
+#include "util.h" // IWYU pragma: keep (copy_to_kernel_nofault compat)
 
 // https://github.com/fuqiuluo/ovo/blob/f7da411458e87d32438dc14fce5a3313ed0c967e/ovo/mmuhack.c#L21
 
@@ -48,26 +49,49 @@ unsigned long phys_from_virt(unsigned long addr, int *err)
 #endif
 
     pud = pud_offset(p4d, addr);
-    if (pud_none(*pud) || pud_bad(*pud))
+    if (pud_none(*pud))
         goto fail;
     pr_debug("pud of 0x%lx p=0x%lx v=0x%lx", addr, (uintptr_t)pud, (uintptr_t)pud_val(*pud));
+    /* A huge/section-mapped PUD has to be recognized BEFORE pud_bad(): on
+     * this tree pud_bad(pud) is !(pud_val(pud) & PUD_TABLE_BIT), which is
+     * true for a valid section entry too (it is not a table pointer, by
+     * design), so checking pud_bad() first would reject a real mapping as
+     * absent. pud_leaf() is the >=5.x name; pud_sect() (confirmed present
+     * in this tree's own arch/arm64/include/asm/pgtable.h, unconditionally
+     * defined either as a real macro or a `return false` stub depending on
+     * page size/levels) is the arm64-specific name it replaced. */
 #if defined(pud_leaf)
     if (pud_leaf(*pud)) {
         pr_debug("Address 0x%lx maps to a PUD-level huge page\n", addr);
         return __pud_to_phys(*pud) + ((addr & ~PUD_MASK));
     }
+#elif defined(pud_sect)
+    if (pud_sect(*pud)) {
+        pr_debug("Address 0x%lx maps to a PUD-level huge page\n", addr);
+        return __pud_to_phys(*pud) + ((addr & ~PUD_MASK));
+    }
 #endif
+    if (pud_bad(*pud))
+        goto fail;
 
     pmd = pmd_offset(pud, addr);
     pr_debug("pmd of 0x%lx p=0x%lx v=0x%lx", addr, (uintptr_t)pmd, (uintptr_t)pmd_val(*pmd));
+    if (pmd_none(*pmd))
+        goto fail;
+        /* Same reasoning as the PUD case just above, and the same fix: check
+     * the huge/section mapping before pmd_bad(), not after. */
 #if defined(pmd_leaf)
     if (pmd_leaf(*pmd)) {
         pr_debug("Address 0x%lx maps to a PMD-level huge page\n", addr);
         return __pmd_to_phys(*pmd) + ((addr & ~PMD_MASK));
     }
+#elif defined(pmd_sect)
+    if (pmd_sect(*pmd)) {
+        pr_debug("Address 0x%lx maps to a PMD-level huge page\n", addr);
+        return __pmd_to_phys(*pmd) + ((addr & ~PMD_MASK));
+    }
 #endif
-
-    if (pmd_none(*pmd) || pmd_bad(*pmd))
+    if (pmd_bad(*pmd))
         goto fail;
 
     pte = pte_offset_kernel(pmd, addr);

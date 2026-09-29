@@ -13,6 +13,7 @@
 #include "sepolicy.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ss/symtab.h"
+#include "selinux.h" // IWYU pragma: keep (SELINUX_POLICY_INSTEAD_SELINUX_SS)
 
 #define KSU_SUPPORT_ADD_TYPE
 
@@ -537,6 +538,7 @@ static const struct hashtab_key_params filenametr_key_params = {
 };
 #endif
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 7, 0)
 static bool add_filename_trans(struct policydb *db, const char *s, const char *t, const char *c, const char *d,
                                const char *o)
 {
@@ -624,6 +626,91 @@ free_trans:
 out:
     return false;
 }
+#else /* < 5.7.0: no filename_trans_key/stypes-ebitmap model yet.
+       * struct filename_trans is the WHOLE key (stype included -- one
+       * hashtab entry per (stype,ttype,tclass,name) tuple, not one per
+       * (ttype,tclass,name) with an stypes ebitmap of every allowed
+       * source), struct filename_trans_datum is just { u32 otype }, and
+       * db->filename_trans is a plain struct hashtab * with no _params
+       * variant of hashtab_insert -- confirmed directly against this
+       * tree's own security/selinux/ss/policydb.h. filename_trans_ttypes
+       * is a separate coarse ebitmap ("does this ttype have any
+       * filename-trans rule at all") the AVC lookup path consults; nothing
+       * here reads it back, so setting the one bit this rule needs is the
+       * whole obligation. */
+static bool add_filename_trans(struct policydb *db, const char *s, const char *t, const char *c, const char *d,
+                               const char *o)
+{
+    struct type_datum *src, *tgt, *def;
+    struct class_datum *cls;
+    struct filename_trans *new_key;
+    struct filename_trans_datum *trans;
+
+    src = symtab_search(&db->p_types, s);
+    if (src == NULL) {
+        pr_warn("source type %s does not exist\n", s);
+        return false;
+    }
+    tgt = symtab_search(&db->p_types, t);
+    if (tgt == NULL) {
+        pr_warn("target type %s does not exist\n", t);
+        return false;
+    }
+    cls = symtab_search(&db->p_classes, c);
+    if (cls == NULL) {
+        pr_warn("class %s does not exist\n", c);
+        return false;
+    }
+    def = symtab_search(&db->p_types, d);
+    if (def == NULL) {
+        pr_warn("default type %s does not exist\n", d);
+        return false;
+    }
+
+    struct filename_trans key;
+    key.stype = src->value;
+    key.ttype = tgt->value;
+    key.tclass = cls->value;
+    key.name = o;
+
+    trans = hashtab_search(db->filename_trans, &key);
+    if (trans) {
+        // Duplicate, overwrite existing data and return
+        trans->otype = def->value;
+        return true;
+    }
+
+    trans = (struct filename_trans_datum *)kcalloc(1, sizeof(*trans), GFP_KERNEL);
+    if (!trans) {
+        pr_err("add_filename_trans: alloc filename_trans_datum failed\n");
+        return false;
+    }
+    new_key = (struct filename_trans *)kmalloc(sizeof(*new_key), GFP_KERNEL);
+    if (!new_key) {
+        pr_err("add_filename_trans: alloc filename_trans failed\n");
+        kfree(trans);
+        return false;
+    }
+    *new_key = key;
+    new_key->name = kstrdup(key.name, GFP_KERNEL);
+    if (!new_key->name) {
+        pr_err("add_filename_trans: kstrdup name failed\n");
+        kfree(new_key);
+        kfree(trans);
+        return false;
+    }
+    trans->otype = def->value;
+    if (hashtab_insert(db->filename_trans, new_key, trans)) {
+        pr_err("add_filename_trans: hashtab_insert failed\n");
+        kfree((void *)new_key->name);
+        kfree(new_key);
+        kfree(trans);
+        return false;
+    }
+
+    return ebitmap_set_bit(&db->filename_trans_ttypes, tgt->value - 1, 1) == 0;
+}
+#endif
 
 static bool add_genfscon(struct policydb *db, const char *fs_name, const char *path, const char *context)
 {
@@ -894,6 +981,18 @@ bool ksu_genfscon(struct policydb *db, const char *fs_name, const char *path, co
 
 // ======== sepolicy ========
 
+/* Cloning a whole struct selinux_policy (policydb_write() then
+ * policydb_read() back into a fresh copy, so the edit target and the live
+ * policy are independent until an RCU-swap installs the edited one) has no
+ * equivalent below the selinux_policy split (SELINUX_POLICY_INSTEAD_SELINUX_SS,
+ * selinux.h) -- there is no second policy slot to clone into, only the one
+ * live policydb, mutated in place (selinux/rules.c's own apply_kernelsu_rules()
+ * has the direct-mutation path for that kernel). Every caller of these two
+ * functions already branches on that same macro, so neither is ever called
+ * below the split; they are gated out here rather than left to fail only if
+ * something new ever called them. */
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
+
 void ksu_destroy_sepolicy(struct selinux_policy *pol)
 {
     policydb_destroy(&pol->policydb);
@@ -979,3 +1078,5 @@ out_free_data:
 
     return ERR_PTR(ret);
 }
+
+#endif /* SELINUX_POLICY_INSTEAD_SELINUX_SS */

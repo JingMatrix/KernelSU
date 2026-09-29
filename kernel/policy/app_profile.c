@@ -64,7 +64,17 @@ void setup_groups(struct root_profile *profile, struct cred *cred)
     put_group_info(group_info);
 }
 
+/* seccomp_filter_release() is put_seccomp_filter() renamed (Christian
+ * Brauner, "seccomp: release filter after task is fully dead", Linux 5.8) --
+ * identical signature (struct task_struct *, releases tsk->seccomp.filter's
+ * reference), so the old name is an exact alias, not an approximation.
+ * put_seccomp_filter() is `extern`, not static, in this tree's own
+ * include/linux/seccomp.h, confirmed reachable the normal way. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0)
 void seccomp_filter_release(struct task_struct *tsk);
+#else
+#define seccomp_filter_release put_seccomp_filter
+#endif
 
 // https://cs.android.com/android/_/android/kernel/common/+/5346453405bf12d7ed6003f45dd47b71744fe1be
 // Some 15-6.6 kernel have this backport while others don't have, e.g. Pixel 10
@@ -101,7 +111,14 @@ static void disable_seccomp(void)
 
     current->seccomp.mode = 0;
     current->seccomp.filter = NULL;
+    /* struct seccomp gained filter_count (commit c818c03b661c, "seccomp:
+     * Report number of loaded filters in /proc/$pid/status", ~Linux 5.9) as
+     * a /proc-visible counter alongside the real filter pointer above --
+     * before that, mode/filter are the whole struct, so there is nothing
+     * else to reset. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
     atomic_set(&current->seccomp.filter_count, 0);
+#endif
     spin_unlock_irq(&current->sighand->siglock);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 11, 0)

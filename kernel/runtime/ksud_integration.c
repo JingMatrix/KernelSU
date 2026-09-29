@@ -23,6 +23,7 @@
 #include "arch.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
+#include "util.h" // IWYU pragma: keep (copy_*_user_nofault compat)
 #include "runtime/ksud.h"
 #include "runtime/ksud_boot.h"
 #include "selinux/selinux.h"

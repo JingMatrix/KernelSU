@@ -13,6 +13,13 @@
 #include <linux/clocksource.h>
 #include <vdso/datapage.h>
 #include <vdso/clocksource.h>
+
+/* Kryo 4XX Gold (Snapdragon 865-era) postdates this kernel's own
+ * cputype.h -- a real #define there (0x804, unchanged since), not an enum,
+ * so #ifndef correctly detects it either way. */
+#ifndef QCOM_CPU_PART_KRYO_4XX_GOLD
+#define QCOM_CPU_PART_KRYO_4XX_GOLD 0x804
+#endif
 #endif
 
 #include "uapi/supercall.h"
@@ -112,11 +119,22 @@ int ksu_set_spoof_cpu(struct ksu_set_spoof_cpu_cmd *cmd)
                         (struct clocksource **)find_kernel_symbol_exact("curr_clocksource");
                     if (curr_cs_ptr && *curr_cs_ptr) {
                         struct clocksource *cs = *curr_cs_ptr;
+                        /* commit 5e3c6a312a09 ("ARM/arm64: vdso: Use common
+                         * vdso clock mode storage", Linux 5.6) flattened
+                         * clocksource's own vdso_clock_mode out of arm64's
+                         * arch_clocksource_data wrapper; before that it is
+                         * cs->archdata.clock_mode, the same enum field one
+                         * level further in. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 6, 0)
+#define ksu_cs_vdso_clock_mode(cs) ((cs)->vdso_clock_mode)
+#else
+#define ksu_cs_vdso_clock_mode(cs) ((cs)->archdata.clock_mode)
+#endif
                         pr_info("ksu: set_spoof_cpu found active clocksource '%s' (current vdso_clock_mode: %d)\n",
-                                cs->name ? cs->name : "unknown", cs->vdso_clock_mode);
-                        cs->vdso_clock_mode = VDSO_CLOCKMODE_ARCHTIMER;
+                                cs->name ? cs->name : "unknown", ksu_cs_vdso_clock_mode(cs));
+                        ksu_cs_vdso_clock_mode(cs) = VDSO_CLOCKMODE_ARCHTIMER;
                         pr_info("ksu: set_spoof_cpu updated clocksource '%s' vdso_clock_mode to %d\n",
-                                cs->name ? cs->name : "unknown", cs->vdso_clock_mode);
+                                cs->name ? cs->name : "unknown", ksu_cs_vdso_clock_mode(cs));
                     } else {
                         pr_warn("ksu: set_spoof_cpu failed to resolve 'curr_clocksource'\n");
                     }

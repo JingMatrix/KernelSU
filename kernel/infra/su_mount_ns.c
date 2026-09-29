@@ -21,8 +21,21 @@
 #include "infra/su_mount_ns.h"
 #include "util.h"
 
+/* path_mount() (mount/remount using an already-resolved struct path instead
+ * of a user-space path string) was added in Linux 5.9 (kernel_umount.c's
+ * own comment on path_umount(), added in the same series). The one caller
+ * below uses it only to flip an already-mounted root's propagation type to
+ * private (dev_name/type_page/data_page all NULL) -- not to mount anything
+ * new -- and the equivalent for that specific operation on an older kernel
+ * (change_mnt_propagation(), fs-internal, static in fs/pnode.c, needs
+ * fs/mount.h's real_mount()/struct mount layout to even call) is no more
+ * reachable than do_umount() is from kernel_umount.c. Skipped below 5.9 for
+ * the same reason: this is mount-namespace isolation hardening, not
+ * something root itself depends on. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
 extern int path_mount(const char *dev_name, struct path *path, const char *type_page, unsigned long flags,
                       void *data_page);
+#endif
 
 #if defined(__aarch64__)
 extern long __arm64_sys_setns(const struct pt_regs *regs);
@@ -148,12 +161,15 @@ static void ksu_mnt_ns_individual(void)
     // make root mount private
     struct path root_path;
     get_fs_root(current->fs, &root_path);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
     int pm_ret = path_mount(NULL, &root_path, NULL, MS_PRIVATE | MS_REC, NULL);
-    path_put(&root_path);
-
     if (pm_ret < 0) {
         pr_err("failed to make root private, err: %d\n", pm_ret);
     }
+#else
+    pr_info("skipping root mount privatization: path_mount() unavailable below Linux 5.9\n");
+#endif
+    path_put(&root_path);
 }
 
 void setup_mount_ns(int32_t ns_mode)

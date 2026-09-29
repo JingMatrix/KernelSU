@@ -2,6 +2,7 @@
 #include <linux/limits.h>
 #include <linux/rculist.h>
 #include <linux/mutex.h>
+#include <linux/sched/task.h> // IWYU pragma: keep (put_task_struct)
 #include <linux/task_work.h>
 #include <linux/capability.h>
 #include <linux/compiler.h>
@@ -24,6 +25,7 @@
 #include "policy/allowlist.h"
 #include "manager/manager_identity.h"
 #include "infra/su_mount_ns.h"
+#include "util.h" // IWYU pragma: keep (TWA_RESUME compat)
 
 #define FILE_MAGIC 0x7f4b5355 // ' KSU', u32
 #define FILE_FORMAT_VERSION 4 // u32

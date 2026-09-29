@@ -17,7 +17,10 @@
 
 struct selinux_policy *backup_sepolicy;
 
-#define SELINUX_POLICY_INSTEAD_SELINUX_SS
+/* SELINUX_POLICY_INSTEAD_SELINUX_SS: selinux.h, version-gated -- do not
+ * redefine it unconditionally here, or every branch below that checks it
+ * silently assumes the modern selinux_policy model even on a kernel that
+ * has no such thing. */
 
 #define ALL NULL
 
@@ -42,47 +45,13 @@ static void reset_avc_cache()
     selinux_xfrm_notify_policyload();
 }
 
-void apply_kernelsu_rules()
+/* The actual ruleset KernelSU needs, identical whether db is a cloned
+ * policydb about to be RCU-swapped in (>= 5.10) or the one live policydb
+ * mutated in place (< 5.10, no clone primitive to swap) -- the two
+ * apply_kernelsu_rules() bodies below differ only in how db is reached and
+ * installed, never in what gets written into it. */
+static void apply_kernelsu_ruleset(struct policydb *db)
 {
-    struct selinux_policy *pol, *old_pol = selinux_state.policy;
-    struct policydb *db;
-
-    if (!getenforce()) {
-        pr_info("SELinux permissive or disabled, apply rules!\n");
-    }
-
-    mutex_lock(&selinux_state.policy_mutex);
-    backup_sepolicy =
-        ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
-    if (IS_ERR(backup_sepolicy)) {
-        pr_err("failed to create backup sepolicy: %ld\n", PTR_ERR(backup_sepolicy));
-        backup_sepolicy = NULL;
-    } else {
-        backup_sepolicy->sidtab = kzalloc(sizeof(*backup_sepolicy->sidtab), GFP_KERNEL);
-        if (!backup_sepolicy->sidtab) {
-            pr_err("failed to alloc backup sidtab\n");
-            ksu_destroy_sepolicy(backup_sepolicy);
-            backup_sepolicy = NULL;
-        } else {
-            int ret = policydb_load_isids(&backup_sepolicy->policydb, backup_sepolicy->sidtab);
-            if (ret) {
-                pr_err("failed to load isids for backup sepolicy: %d!\n", ret);
-                kfree(backup_sepolicy->sidtab);
-                ksu_destroy_sepolicy(backup_sepolicy);
-                backup_sepolicy = NULL;
-            } else {
-                pr_info("backup sepolicy success! latest_granting=%d\n", backup_sepolicy->latest_granting);
-            }
-        }
-    }
-    pol = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
-    if (IS_ERR(pol)) {
-        pr_err("failed to dup selinux_policy: %ld\n", PTR_ERR(pol));
-        goto out_unlock;
-    }
-
-    db = &pol->policydb;
-
     ksu_type(db, KERNEL_SU_DOMAIN, "domain");
     ksu_permissive(db, KERNEL_SU_DOMAIN);
     ksu_typeattribute(db, KERNEL_SU_DOMAIN, "mlstrustedsubject");
@@ -154,6 +123,50 @@ void apply_kernelsu_rules()
     // Allow system server kill su process
     ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "getpgid");
     ksu_allow(db, "system_server", KERNEL_SU_DOMAIN, "process", "sigkill");
+}
+
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
+void apply_kernelsu_rules()
+{
+    struct selinux_policy *pol, *old_pol = selinux_state.policy;
+    struct policydb *db;
+
+    if (!getenforce()) {
+        pr_info("SELinux permissive or disabled, apply rules!\n");
+    }
+
+    mutex_lock(&selinux_state.policy_mutex);
+    backup_sepolicy =
+        ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
+    if (IS_ERR(backup_sepolicy)) {
+        pr_err("failed to create backup sepolicy: %ld\n", PTR_ERR(backup_sepolicy));
+        backup_sepolicy = NULL;
+    } else {
+        backup_sepolicy->sidtab = kzalloc(sizeof(*backup_sepolicy->sidtab), GFP_KERNEL);
+        if (!backup_sepolicy->sidtab) {
+            pr_err("failed to alloc backup sidtab\n");
+            ksu_destroy_sepolicy(backup_sepolicy);
+            backup_sepolicy = NULL;
+        } else {
+            int ret = policydb_load_isids(&backup_sepolicy->policydb, backup_sepolicy->sidtab);
+            if (ret) {
+                pr_err("failed to load isids for backup sepolicy: %d!\n", ret);
+                kfree(backup_sepolicy->sidtab);
+                ksu_destroy_sepolicy(backup_sepolicy);
+                backup_sepolicy = NULL;
+            } else {
+                pr_info("backup sepolicy success! latest_granting=%d\n", backup_sepolicy->latest_granting);
+            }
+        }
+    }
+    pol = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
+    if (IS_ERR(pol)) {
+        pr_err("failed to dup selinux_policy: %ld\n", PTR_ERR(pol));
+        goto out_unlock;
+    }
+
+    db = &pol->policydb;
+    apply_kernelsu_ruleset(db);
 
     rcu_assign_pointer(selinux_state.policy, pol);
     synchronize_rcu();
@@ -163,6 +176,40 @@ void apply_kernelsu_rules()
 out_unlock:
     mutex_unlock(&selinux_state.policy_mutex);
 }
+#else /* no selinux_policy clone/RCU-swap primitive below the split: mutate
+       * selinux_state.ss->policydb directly, in place, with no backup and no
+       * rollback -- the same way upstream KernelSU always applied its rules
+       * before the clone architecture existed. backup_sepolicy is left NULL
+       * (its declaration above is unconditional, but nothing here ever
+       * populates it): feature/selinux_hide.c's own !backup_sepolicy check
+       * already treats that as "unavailable, refuse to enable" rather than a
+       * fault, which is exactly what a kernel with no second policy slot to
+       * clone into needs it to mean. This is the only path that ever
+       * installs these rules on such a kernel, so it runs once,
+       * synchronously, at boot -- there is no concurrent-caller hazard to
+       * weigh against the missing lock. */
+void apply_kernelsu_rules()
+{
+    struct selinux_ss *ss;
+    struct policydb *db;
+
+    if (!getenforce()) {
+        pr_info("SELinux permissive or disabled, apply rules!\n");
+    }
+
+    /* selinux_state.ss is set once during early boot and never RCU-swapped
+     * on this pre-split kernel (only selinux_state.policy is, on the other
+     * side of the #if above) -- rcu_dereference_protected(..., true) says
+     * so to lockdep instead of a bare rcu_dereference() that would warn
+     * under CONFIG_PROVE_RCU for running outside rcu_read_lock(). */
+    ss = rcu_dereference_protected(selinux_state.ss, true);
+    db = &ss->policydb;
+
+    apply_kernelsu_ruleset(db);
+
+    reset_avc_cache();
+}
+#endif
 
 #define KSU_SEPOLICY_MAX_BATCH_SIZE (8U * 1024U * 1024U)
 #define KSU_SEPOLICY_MAX_ARGS 5
@@ -429,15 +476,65 @@ static int apply_one_sepolicy_cmd(struct policydb *db, const struct sepol_data *
     }
 }
 
+/* The batch parser and per-command dispatch, identical regardless of which
+ * kernel's db this is mutating. Returns the number of successfully-applied
+ * commands (>= 0) once the whole payload has been walked, or a negative
+ * errno the moment a command cannot even be PARSED (a malformed batch -- an
+ * unknown type/class name inside an otherwise well-formed command is a
+ * different, non-fatal case: apply_one_sepolicy_cmd() logs it, the count
+ * just does not include it, and the loop moves on to the next command). */
+static int apply_sepolicy_batch(struct policydb *db, const u8 *payload, size_t data_len)
+{
+    struct sepol_batch_cursor cursor;
+    int success_cmd_count = 0;
+    u32 cmd_index = 0;
+    int ret;
+
+    cursor.cur = payload;
+    cursor.end = payload + data_len;
+
+    while (cursor.cur < cursor.end) {
+        struct sepol_data header;
+        const char *args[KSU_SEPOLICY_MAX_ARGS] = { 0 };
+        int expected_argc;
+        u32 arg_index;
+
+        ret = sepol_read_cmd_header(&cursor, &header);
+        if (ret < 0) {
+            pr_err("sepol: failed to read cmd header #%u.\n", cmd_index);
+            return ret;
+        }
+
+        expected_argc = sepol_expected_argc(header.cmd);
+        if (expected_argc < 0 || expected_argc > KSU_SEPOLICY_MAX_ARGS) {
+            pr_err("sepol: invalid cmd header #%u.\n", cmd_index);
+            return -EINVAL;
+        }
+
+        for (arg_index = 0; arg_index < (u32)expected_argc; arg_index++) {
+            ret = sepol_read_string(&cursor, &args[arg_index]);
+            if (ret < 0) {
+                pr_err("sepol: failed to read cmd #%u arg #%u.\n", cmd_index, arg_index);
+                return ret;
+            }
+        }
+
+        ret = apply_one_sepolicy_cmd(db, &header, args);
+        if (ret < 0) {
+            pr_err("sepol: cmd #%u failed, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
+        } else {
+            success_cmd_count++;
+        }
+        cmd_index++;
+    }
+
+    return success_cmd_count;
+}
+
 int handle_sepolicy(void __user *user_data, u64 data_len)
 {
-    struct selinux_policy *pol, *old_pol;
-    struct policydb *db;
-    struct sepol_batch_cursor cursor;
     u8 *payload;
     int ret;
-    int success_cmd_count;
-    u32 cmd_index;
 
     if (!user_data || !data_len) {
         return -EINVAL;
@@ -461,71 +558,59 @@ int handle_sepolicy(void __user *user_data, u64 data_len)
         pr_info("SELinux permissive or disabled when handle policy!\n");
     }
 
-    mutex_lock(&selinux_state.policy_mutex);
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
+    {
+        struct selinux_policy *pol, *old_pol;
+        struct policydb *db;
 
-    old_pol = selinux_state.policy;
-    pol = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
-    if (IS_ERR(pol)) {
-        ret = PTR_ERR(pol);
-        pr_err("ksu_dup_sepolicy err: %d\n", ret);
-        goto out_unlock;
-    }
-    db = &pol->policydb;
+        mutex_lock(&selinux_state.policy_mutex);
 
-    cursor.cur = payload;
-    cursor.end = payload + (size_t)data_len;
+        old_pol = selinux_state.policy;
+        pol = ksu_dup_sepolicy(rcu_dereference_protected(old_pol, lockdep_is_held(&selinux_state.policy_mutex)));
+        if (IS_ERR(pol)) {
+            ret = PTR_ERR(pol);
+            pr_err("ksu_dup_sepolicy err: %d\n", ret);
+            goto out_unlock;
+        }
+        db = &pol->policydb;
 
-    ret = 0;
-    success_cmd_count = 0;
-    cmd_index = 0;
-    while (cursor.cur < cursor.end) {
-        struct sepol_data header;
-        const char *args[KSU_SEPOLICY_MAX_ARGS] = { 0 };
-        int expected_argc;
-        u32 arg_index;
-
-        ret = sepol_read_cmd_header(&cursor, &header);
+        ret = apply_sepolicy_batch(db, payload, (size_t)data_len);
         if (ret < 0) {
-            pr_err("sepol: failed to read cmd header #%u.\n", cmd_index);
-            goto out_drop_new_policy;
+            ksu_destroy_sepolicy(pol);
+            goto out_unlock;
         }
 
-        expected_argc = sepol_expected_argc(header.cmd);
-        if (expected_argc < 0 || expected_argc > KSU_SEPOLICY_MAX_ARGS) {
-            ret = -EINVAL;
-            pr_err("sepol: invalid cmd header #%u.\n", cmd_index);
-            goto out_drop_new_policy;
-        }
+        rcu_assign_pointer(selinux_state.policy, pol);
+        synchronize_rcu();
+        ksu_destroy_sepolicy(old_pol);
 
-        for (arg_index = 0; arg_index < (u32)expected_argc; arg_index++) {
-            ret = sepol_read_string(&cursor, &args[arg_index]);
-            if (ret < 0) {
-                pr_err("sepol: failed to read cmd #%u arg #%u.\n", cmd_index, arg_index);
-                goto out_drop_new_policy;
-            }
-        }
-
-        ret = apply_one_sepolicy_cmd(db, &header, args);
-        if (ret < 0) {
-            pr_err("sepol: cmd #%u failed, cmd=%u subcmd=%u.\n", cmd_index, header.cmd, header.subcmd);
-        } else {
-            success_cmd_count++;
-        }
-        cmd_index++;
+        reset_avc_cache();
+    out_unlock:
+        mutex_unlock(&selinux_state.policy_mutex);
     }
+#else
+    /* No clone/RCU-swap primitive below the split (see
+     * apply_kernelsu_rules()'s own comment above): the batch mutates
+     * selinux_state.ss->policydb directly, with no rollback. A command that
+     * fails to PARSE still stops the batch immediately, same as the cloned
+     * path -- but whatever commands already applied before that point stay
+     * applied, since there is no discardable clone to drop them with. This
+     * is strictly the historical, pre-clone-era KernelSU behavior, not a new
+     * regression introduced for this kernel. */
+    {
+        /* Same reasoning as apply_kernelsu_rules() above: never RCU-swapped
+         * on this pre-split kernel, so rcu_dereference_protected() is the
+         * correct read, not a bare rcu_dereference() outside rcu_read_lock(). */
+        struct selinux_ss *ss = rcu_dereference_protected(selinux_state.ss, true);
+        struct policydb *db = &ss->policydb;
 
-    rcu_assign_pointer(selinux_state.policy, pol);
-    synchronize_rcu();
-    ksu_destroy_sepolicy(old_pol);
+        ret = apply_sepolicy_batch(db, payload, (size_t)data_len);
+        if (ret >= 0) {
+            reset_avc_cache();
+        }
+    }
+#endif
 
-    reset_avc_cache();
-    ret = success_cmd_count;
-    goto out_unlock;
-
-out_drop_new_policy:
-    ksu_destroy_sepolicy(pol);
-out_unlock:
-    mutex_unlock(&selinux_state.policy_mutex);
 out_free:
     kvfree(payload);
 

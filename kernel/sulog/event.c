@@ -2,7 +2,6 @@
 #include <linux/compat.h>
 #include <linux/cred.h>
 #include <linux/gfp.h>
-#include <linux/minmax.h>
 #include <linux/overflow.h>
 #include <linux/sched/signal.h>
 #include <linux/slab.h>
@@ -10,11 +9,22 @@
 #include <linux/uaccess.h>
 
 #include <linux/version.h>
+/* min()/max() lived directly in <linux/kernel.h> before commit b296a6d53339
+ * ("kernel.h: Split out min()/max() et al helpers", Linux 5.10) split them
+ * into their own header, which kernel.h still pulls in for anyone who only
+ * ever included kernel.h -- so a kernel below that split needs kernel.h
+ * itself, not the (nonexistent) standalone header. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+#include <linux/minmax.h>
+#else
+#include <linux/kernel.h>
+#endif
 #if defined(__x86_64__) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 2, 0)
 #include <linux/mm.h>
 #endif
 
 #include "feature/sulog.h"
+#include "util.h" // IWYU pragma: keep (strncpy_from_user_nofault compat)
 #include "infra/event_queue.h"
 #include "klog.h" // IWYU pragma: keep
 #include "sulog/event.h"

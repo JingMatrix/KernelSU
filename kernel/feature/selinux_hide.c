@@ -28,6 +28,7 @@
 #include "ksu.h"
 #include "policy/feature.h"
 #include "hook/lsm_hook.h"
+#include "selinux/selinux.h" // IWYU pragma: keep (SELINUX_POLICY_INSTEAD_SELINUX_SS)
 
 static DEFINE_MUTEX(selinux_hide_mutex);
 static bool ksu_selinux_hide_enabled __read_mostly = false;
@@ -247,17 +248,44 @@ call_orig:
 static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);
 static struct page *fake_status = NULL;
 
+/* status_lock lives directly on selinux_state at/after the selinux_policy
+ * split (SELINUX_POLICY_INSTEAD_SELINUX_SS, selinux.h); below it it is
+ * selinux_state.ss->status_lock instead (confirmed against a qgki-5.4
+ * tree's own ss/services.h) -- same field, one level further in, same as
+ * every other selinux_ss/selinux_policy split this file and
+ * rules.c/sepolicy.c already handle. Shared by every caller below instead
+ * of repeating the #ifdef, since none of them do anything else with ss. */
+static inline struct mutex *ksu_selinux_status_lock(void)
+{
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
+    return &selinux_state.status_lock;
+#else
+    /* selinux_state.ss is never RCU-swapped on this pre-split kernel (see
+     * selinux/rules.c's own apply_kernelsu_rules() comment), so
+     * rcu_dereference_protected(..., true) is the correct read here, not a
+     * bare rcu_dereference() outside rcu_read_lock(). */
+    return &rcu_dereference_protected(selinux_state.ss, true)->status_lock;
+#endif
+}
+
 static void initialize_fake_status()
 {
-    mutex_lock(&selinux_state.status_lock);
+    struct mutex *status_lock = ksu_selinux_status_lock();
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
+    struct page *status_page = selinux_state.status_page;
+#else
+    struct page *status_page = rcu_dereference_protected(selinux_state.ss, true)->status_page;
+#endif
+
+    mutex_lock(status_lock);
     if (fake_status)
         goto out;
-    if (!selinux_state.status_page) {
+    if (!status_page) {
         pr_warn("initialize_fake_status: status_page not exist\n");
         goto out;
     }
 
-    struct selinux_kernel_status *status = page_address(selinux_state.status_page);
+    struct selinux_kernel_status *status = page_address(status_page);
     if (!status->enforcing && !ksu_late_loaded) {
         pr_warn("initialize_fake_status: skip not enforcing\n");
         goto out;
@@ -293,7 +321,7 @@ static void initialize_fake_status()
             new_status->policyload, new_status->enforcing);
 
 out:
-    mutex_unlock(&selinux_state.status_lock);
+    mutex_unlock(status_lock);
 }
 
 typedef int (*sel_open_handle_status_fn)(struct inode *inode, struct file *filp);
@@ -302,9 +330,10 @@ static int my_sel_open_handle_status(struct inode *inode, struct file *filp)
 {
     if (likely(current_uid().val >= 10000 && ksu_selinux_hide_enabled)) {
         void *data;
-        mutex_lock(&selinux_state.status_lock);
+        struct mutex *status_lock = ksu_selinux_status_lock();
+        mutex_lock(status_lock);
         data = fake_status;
-        mutex_unlock(&selinux_state.status_lock);
+        mutex_unlock(status_lock);
         if (data) {
             filp->private_data = data;
             return 0;
@@ -346,7 +375,15 @@ static int ksu_selinux_hide_enable()
     }
 #else
     fake_state.initialized = true;
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
     fake_state.policy = backup_sepolicy;
+#else
+    /* backup_sepolicy is never populated below the selinux_policy split (no
+     * clone primitive to fill it with -- see selinux/rules.c's own
+     * apply_kernelsu_rules() comment), so the !backup_sepolicy check above
+     * already returned -EAGAIN before this line could ever run; there is
+     * nothing to assign into fake_state.ss. */
+#endif
 #endif
 
     context_write = &selinux_write_op[SEL_CONTEXT];
@@ -517,16 +554,20 @@ void __exit ksu_selinux_hide_exit()
     }
     mutex_unlock(&selinux_hide_mutex);
     ksu_unregister_feature_handler(KSU_FEATURE_SELINUX_HIDE);
-    mutex_lock(&selinux_state.status_lock);
-    if (fake_status)
-        __free_page(fake_status);
-    fake_status = NULL;
-    mutex_unlock(&selinux_state.status_lock);
+    {
+        struct mutex *status_lock = ksu_selinux_status_lock();
+        mutex_lock(status_lock);
+        if (fake_status)
+            __free_page(fake_status);
+        fake_status = NULL;
+        mutex_unlock(status_lock);
+    }
 }
 
 void ksu_selinux_hide_drop_backup_if_unused()
 {
     mutex_lock(&selinux_hide_mutex);
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
     if (!ksu_selinux_hide_running && backup_sepolicy) {
         pr_info("selinux_hide is not enabled - drop backup_sepolicy\n");
         sidtab_destroy(backup_sepolicy->sidtab);
@@ -534,6 +575,10 @@ void ksu_selinux_hide_drop_backup_if_unused()
         ksu_destroy_sepolicy(backup_sepolicy);
         backup_sepolicy = NULL;
     }
+    /* backup_sepolicy is never populated below the selinux_policy split (see
+     * selinux/rules.c's own apply_kernelsu_rules() comment) -- always NULL
+     * there, so there is nothing this ever needs to drop. */
+#endif
     mutex_unlock(&selinux_hide_mutex);
 }
 
