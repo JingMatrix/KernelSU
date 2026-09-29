@@ -30,6 +30,7 @@
 #include "ksu.h"
 #include "policy/feature.h"
 #include "hook/lsm_hook.h"
+#include "selinux/selinux.h" // IWYU pragma: keep (SELINUX_POLICY_INSTEAD_SELINUX_SS)
 
 static DEFINE_MUTEX(selinux_hide_mutex);
 static bool ksu_selinux_hide_enabled __read_mostly = false;
@@ -312,17 +313,44 @@ call_orig:
 static DEFINE_STATIC_KEY_FALSE(fake_status_initialize_key);
 static struct page *fake_status = NULL;
 
+/* status_lock lives directly on selinux_state at/after the selinux_policy
+ * split (SELINUX_POLICY_INSTEAD_SELINUX_SS, selinux.h); below it it is
+ * selinux_state.ss->status_lock instead (confirmed against a qgki-5.4
+ * tree's own ss/services.h) -- same field, one level further in, same as
+ * every other selinux_ss/selinux_policy split this file and
+ * rules.c/sepolicy.c already handle. Shared by every caller below instead
+ * of repeating the #ifdef, since none of them do anything else with ss. */
+static inline struct mutex *ksu_selinux_status_lock(void)
+{
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
+    return &selinux_state.status_lock;
+#else
+    /* selinux_state.ss is never RCU-swapped on this pre-split kernel (see
+     * selinux/rules.c's own apply_kernelsu_rules() comment), so
+     * rcu_dereference_protected(..., true) is the correct read here, not a
+     * bare rcu_dereference() outside rcu_read_lock(). */
+    return &rcu_dereference_protected(selinux_state.ss, true)->status_lock;
+#endif
+}
+
 static void initialize_fake_status()
 {
-    mutex_lock(&selinux_state.status_lock);
+    struct mutex *status_lock = ksu_selinux_status_lock();
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
+    struct page *status_page = selinux_state.status_page;
+#else
+    struct page *status_page = rcu_dereference_protected(selinux_state.ss, true)->status_page;
+#endif
+
+    mutex_lock(status_lock);
     if (fake_status)
         goto out;
-    if (!selinux_state.status_page) {
+    if (!status_page) {
         pr_warn("initialize_fake_status: status_page not exist\n");
         goto out;
     }
 
-    struct selinux_kernel_status *status = page_address(selinux_state.status_page);
+    struct selinux_kernel_status *status = page_address(status_page);
     if (!status->enforcing && !ksu_late_loaded) {
         pr_warn("initialize_fake_status: skip not enforcing\n");
         goto out;
@@ -358,7 +386,7 @@ static void initialize_fake_status()
             new_status->policyload, new_status->enforcing);
 
 out:
-    mutex_unlock(&selinux_state.status_lock);
+    mutex_unlock(status_lock);
 }
 
 typedef int (*sel_open_handle_status_fn)(struct inode *inode, struct file *filp);
@@ -367,9 +395,10 @@ static int my_sel_open_handle_status(struct inode *inode, struct file *filp)
 {
     if (likely(current_uid().val >= 10000 && ksu_selinux_hide_enabled)) {
         void *data;
-        mutex_lock(&selinux_state.status_lock);
+        struct mutex *status_lock = ksu_selinux_status_lock();
+        mutex_lock(status_lock);
         data = fake_status;
-        mutex_unlock(&selinux_state.status_lock);
+        mutex_unlock(status_lock);
         if (data) {
             filp->private_data = data;
             return 0;
@@ -577,16 +606,20 @@ void __exit ksu_selinux_hide_exit()
     }
     mutex_unlock(&selinux_hide_mutex);
     ksu_unregister_feature_handler(KSU_FEATURE_SELINUX_HIDE);
-    mutex_lock(&selinux_state.status_lock);
-    if (fake_status)
-        __free_page(fake_status);
-    fake_status = NULL;
-    mutex_unlock(&selinux_state.status_lock);
+    {
+        struct mutex *status_lock = ksu_selinux_status_lock();
+        mutex_lock(status_lock);
+        if (fake_status)
+            __free_page(fake_status);
+        fake_status = NULL;
+        mutex_unlock(status_lock);
+    }
 }
 
 void ksu_selinux_hide_drop_backup_if_unused()
 {
     mutex_lock(&selinux_hide_mutex);
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
     if (!ksu_selinux_hide_running && backup_sepolicy) {
         pr_info("selinux_hide is not enabled - drop backup_sepolicy\n");
         sidtab_destroy(backup_sepolicy->sidtab);
@@ -594,8 +627,32 @@ void ksu_selinux_hide_drop_backup_if_unused()
         ksu_destroy_sepolicy(backup_sepolicy);
         backup_sepolicy = NULL;
     }
+    /* backup_sepolicy is never populated below the selinux_policy split (see
+     * selinux/rules.c's own apply_kernelsu_rules() comment) -- always NULL
+     * there, so there is nothing this ever needs to drop. */
+#endif
     mutex_unlock(&selinux_hide_mutex);
 }
+
+/* Everything below is a backport of SELinux's own context/AV machinery,
+ * reworked to run against a SECOND, cloned struct selinux_policy
+ * (backup_sepolicy) instead of the live one. None of it has a pre-split
+ * equivalent: below SELINUX_POLICY_INSTEAD_SELINUX_SS (selinux/selinux.h)
+ * there is no struct selinux_policy to clone into at all -- only the one
+ * live selinux_state.ss->policydb -- and no struct sidtab_entry or
+ * symtab_search() either. selinux/rules.c's apply_kernelsu_rules() leaves
+ * backup_sepolicy NULL on such a kernel, and ksu_selinux_hide_enable()
+ * above returns -EAGAIN on that before installing any of the hooks that
+ * reach these, so the three stubs in the #else are provably unreachable
+ * rather than a silent downgrade: selinux_hide simply reports itself
+ * unavailable there, which is what the manager already shows.
+ *
+ * Kept as one gate over the whole block, rather than per-function, because
+ * the intermediate helpers (string_to_context_struct, context_struct_to_string,
+ * context_struct_compute_av, type_attribute_bounds_av, constraint_expr_eval)
+ * are reachable only from the three entry points below and would otherwise
+ * be compiled unused. */
+#ifdef SELINUX_POLICY_INSTEAD_SELINUX_SS
 
 /*
  * Caveat:  Mutates scontext.
@@ -1255,3 +1312,27 @@ allow:
     avd->allowed = 0xffffffff;
     goto out;
 }
+
+#else /* no second policy slot below the split: see the comment above. These
+       * keep the hooks' call sites compiling; ksu_selinux_hide_enable()
+       * never installs those hooks on such a kernel, so none of the three
+       * can actually run. */
+
+static int security_context_to_sid_with_policy(struct selinux_policy *policy, const char *scontext, u32 scontext_len,
+                                               u32 *sid, u32 def_sid, gfp_t gfp_flags, u32 *orig_sid_p, int *orig_rc_p)
+{
+    return -EOPNOTSUPP;
+}
+
+static int security_sid_to_context_with_policy(struct selinux_policy *policy, u32 sid, char **scontext,
+                                               u32 *scontext_len)
+{
+    return -EOPNOTSUPP;
+}
+
+static void security_compute_av_user_with_policy(struct selinux_policy *policy, u32 ssid, u32 tsid, u16 tclass,
+                                                 struct av_decision *avd)
+{
+}
+
+#endif /* SELINUX_POLICY_INSTEAD_SELINUX_SS */

@@ -439,7 +439,6 @@ static struct inode *ksu_anon_inode_make_secure_inode(const char *name, const st
 {
     struct inode *inode;
     const struct qstr qname = QSTR_INIT(name, strlen(name));
-    int error;
 
     if (unlikely(!anon_inode_mnt)) {
         return ERR_PTR(-ENODEV);
@@ -449,11 +448,25 @@ static struct inode *ksu_anon_inode_make_secure_inode(const char *name, const st
     if (IS_ERR(inode))
         return inode;
     inode->i_flags &= ~S_PRIVATE;
-    error = security_inode_init_security_anon(inode, &qname, context_inode);
-    if (error) {
-        iput(inode);
-        return ERR_PTR(error);
+    /* security_inode_init_security_anon() ("SELinux support for anonymous
+     * inodes and UFFD", ~5.12) is the LSM hook that lets a security module
+     * assign this inode its own context instead of the anon_inode_mnt's
+     * generic one -- it does not exist before that, which is also the
+     * kernel's own answer for what to do without it: nothing, every
+     * anon-inode file just carried the mount's generic context, same as
+     * every S_PRIVATE anon inode still does today. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 12, 0)
+    {
+        int error = security_inode_init_security_anon(inode, &qname, context_inode);
+        if (error) {
+            iput(inode);
+            return ERR_PTR(error);
+        }
     }
+#else
+    (void)qname;
+    (void)context_inode;
+#endif
     return inode;
 }
 

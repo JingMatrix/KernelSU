@@ -5,6 +5,23 @@
 #include <linux/version.h>
 #include <linux/cred.h>
 
+/* selinux_state kept its policy directly inline (struct selinux_ss *ss,
+ * holding policydb/sidtab/latest_granting/status_page/status_lock/
+ * policy_rwlock -- confirmed against a qgki-5.4 tree's own security.h)
+ * before it was replaced by an RCU-swappable struct selinux_policy *policy
+ * (same fields, plus a policy_mutex serializing reloads) that this file's
+ * own commit history has used 5.10 as the boundary for once already
+ * (JingMatrix/KernelSU@3580796, "Add back support for GKI-1.0 (Linux
+ * 5.4)"). Consumers (selinux/rules.c, selinux/sepolicy.c,
+ * feature/selinux_hide.c) branch on this rather than repeating the version
+ * check, since the pre-split side of every one of those branches also has
+ * no clone/RCU-swap primitive at all -- old-kernel code mutates
+ * selinux_state.ss->policydb directly, the same way upstream KernelSU
+ * always did before the clone architecture existed. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 10, 0)
+#define SELINUX_POLICY_INSTEAD_SELINUX_SS
+#endif
+
 #define KERNEL_SU_DOMAIN "ksu"
 #define KERNEL_SU_FILE "ksu_file"
 
