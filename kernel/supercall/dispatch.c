@@ -2,6 +2,8 @@
 #include <linux/cred.h>
 #include <linux/kallsyms.h>
 #include <linux/mm.h>
+#include <linux/sched/signal.h> // IWYU pragma: keep (task_pgrp, task_session)
+#include <linux/sched/task.h> // IWYU pragma: keep (init_task, tasklist_lock)
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>

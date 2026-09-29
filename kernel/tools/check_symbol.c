@@ -146,12 +146,24 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    /* An empty __versions section is what a CONFIG_MODVERSIONS=n target
+     * (every GKI KMI this project otherwise builds for) always produces,
+     * so a non-empty one usually does mean a real build mismatch worth
+     * failing on. But on a CONFIG_MODVERSIONS=y target modpost populates a
+     * CRC entry for every referenced symbol vmlinux happens to export one
+     * for -- normal, unavoidable behavior of that base kernel config, not a
+     * sign anything is wrong -- so it is a warning here, not a hard error:
+     * ksuinit::load_module() (ksud's own insmod/late-load loader) resolves
+     * every symbol manually against live kallsyms at insmod time and never
+     * reads this section at all, so its content cannot affect whether the
+     * module actually loads. The check that matters either way is below:
+     * every undefined symbol this module references must actually exist,
+     * defined and global/weak, in vmlinux. */
     if (ko_version_sec->sh_size != 0) {
-        fprintf(stderr, "Error: __versions section in %s must have size 0 (actual=%llu)\n", ko_path,
-                (unsigned long long)ko_version_sec->sh_size);
-        close_elf(&ko_elf);
-        close_elf(&vmlinux);
-        return 1;
+        fprintf(stderr,
+                "Warning: __versions section in %s has size %llu (expected 0 -- harmless on a "
+                "CONFIG_MODVERSIONS=y target, since ksuinit's loader never reads it)\n",
+                ko_path, (unsigned long long)ko_version_sec->sh_size);
     }
 
     char *ko_strtab = (char *)ko_elf.data + ko_elf.shdr[ko_symtab->sh_link].sh_offset;

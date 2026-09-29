@@ -53,6 +53,7 @@
 #include "uapi/supercall.h"
 #include "feature/ptctl.h"
 #include "infra/symbol_resolver.h"
+#include "util.h" // IWYU pragma: keep (TWA_RESUME compat)
 
 #define PTCTL_MAX_CHUNK (64 * 1024)
 #define PTCTL_MAX_GUARD 32
