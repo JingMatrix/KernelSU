@@ -12,6 +12,7 @@
 #include <linux/printk.h>
 #include <linux/string.h>
 #include <linux/fs.h>
+#include <linux/namei.h>
 #include <asm-generic/errno-base.h>
 #include <net/genetlink.h>
 #include <linux/moduleparam.h>
@@ -414,6 +415,8 @@ static int my_sel_open_handle_status(struct inode *inode, struct file *filp)
 
 static void hook_selinux_status_open();
 static void ksu_selinux_hide_unhook();
+static int hook_selinux_status_open_via_inode(void);
+static void unhook_selinux_status_open_via_inode(void);
 static int ksu_selinux_hide_enable()
 {
     int ret;
@@ -497,6 +500,9 @@ static void ksu_selinux_hide_unhook()
             pr_err("selinux_hide: exit: patch_text sel_open_handle_status err: %d\n", ret);
         }
     }
+    /* No-op unless the inode route is the one that installed the hook; it
+     * owns both the restore and the igrab() reference. */
+    unhook_selinux_status_open_via_inode();
     ksu_lsm_unhook(&selinux_setprocattr_hook);
 }
 
@@ -562,6 +568,88 @@ void ksu_selinux_hide_handle_post_fs_data()
     }
 }
 
+/*
+ * Swapping the STATUS INODE's own i_fop, for a kernel that refuses a write to
+ * static rodata.
+ *
+ * sel_handle_status_ops is `static const struct file_operations`
+ * (security/selinux/selinuxfs.c), so it lives in .rodata, and on a kernel whose
+ * hypervisor maps static rodata read-only at stage 2 the write is refused no
+ * matter which kernel VA it is made through: ksu_patch_text() already pokes a
+ * freshly-set fixmap alias of the target's own physical page, and
+ * copy_to_kernel_nofault() on that alias still returns -EFAULT. The restriction
+ * is a property of the physical page, so there is no alias left to try.
+ *
+ * The inode reached through the mounted selinuxfs is slab-allocated, and its
+ * i_fop is an ordinary writable pointer. Replacing it with a module-owned copy
+ * of the same ops, differing only in .open, gets the same interception without
+ * writing rodata -- and reaches exactly the one file rather than every inode
+ * that shares the const ops.
+ *
+ * The inode is pinned with igrab() for as long as the hook is installed, so the
+ * ops copy cannot outlive what points at it.
+ */
+static struct file_operations ksu_status_ops_copy;
+static const struct file_operations *ksu_status_ops_orig;
+static struct inode *ksu_status_inode;
+
+static int hook_selinux_status_open_via_inode(void)
+{
+    struct path path;
+    struct inode *inode;
+    int err;
+
+    if (ksu_status_inode)
+        return 0;
+
+    /* Before selinuxfs is mounted there is nothing to reach; the caller
+     * retries on a later boot phase rather than treating this as fatal. */
+    err = kern_path("/sys/fs/selinux/status", 0, &path);
+    if (err)
+        return err;
+
+    inode = d_inode(path.dentry);
+    if (!inode || !inode->i_fop) {
+        path_put(&path);
+        return -ENOENT;
+    }
+
+    ksu_status_ops_orig = inode->i_fop;
+    orig_sel_open_handle_status = ksu_status_ops_orig->open;
+    if (!orig_sel_open_handle_status) {
+        ksu_status_ops_orig = NULL;
+        path_put(&path);
+        return -ENOSYS;
+    }
+
+    ksu_status_ops_copy = *ksu_status_ops_orig;
+    ksu_status_ops_copy.open = my_sel_open_handle_status;
+    ksu_status_inode = igrab(inode);
+    if (!ksu_status_inode) {
+        ksu_status_ops_orig = NULL;
+        orig_sel_open_handle_status = NULL;
+        path_put(&path);
+        return -ENOENT;
+    }
+    /* Plain data write: the inode is not rodata. */
+    ksu_status_inode->i_fop = &ksu_status_ops_copy;
+    path_put(&path);
+    pr_info("selinux_hide: status open hooked through the inode's i_fop\n");
+    return 0;
+}
+
+static void unhook_selinux_status_open_via_inode(void)
+{
+    if (!ksu_status_inode)
+        return;
+    if (ksu_status_ops_orig)
+        ksu_status_inode->i_fop = ksu_status_ops_orig;
+    iput(ksu_status_inode);
+    ksu_status_inode = NULL;
+    ksu_status_ops_orig = NULL;
+    orig_sel_open_handle_status = NULL;
+}
+
 static void hook_selinux_status_open()
 {
     if (orig_sel_open_handle_status)
@@ -581,6 +669,14 @@ static void hook_selinux_status_open()
         pr_err("selinux_hide: init: patch_text sel_open_handle_status err: %d\n", ret);
         sel_open_handle_status_slot = NULL;
         orig_sel_open_handle_status = NULL;
+        /* The ops are rodata, which some kernels refuse to let anything in
+         * EL1 write (see hook_selinux_status_open_via_inode's own comment).
+         * The inode route needs no such write; it needs selinuxfs mounted,
+         * so a failure here is reported and left for a later phase to retry
+         * rather than disabling the feature. */
+        ret = hook_selinux_status_open_via_inode();
+        if (ret)
+            pr_err("selinux_hide: init: inode i_fop fallback err: %d\n", ret);
     }
 }
 

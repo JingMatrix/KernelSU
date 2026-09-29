@@ -46,18 +46,34 @@ static int patch_syscall_table(int nr, syscall_fn_t fn)
         return -EIO;
     }
 
+    // Read back rather than trust the write. ksu_patch_text() reports a
+    // refusal that FAULTS, because copy_to_kernel_nofault() returns -EFAULT
+    // for one; a platform that drops the write instead returns success with
+    // the slot unchanged. A caller choosing between two ways to install its
+    // hook would then pick the one that did nothing, so the slot itself is the
+    // answer rather than the write's own verdict.
+    if (READ_ONCE(ksu_syscall_table[nr]) != fn) {
+        // Both values, because this is also how a read-back that is itself
+        // wrong would show: a caller falls back to its other install path on
+        // this verdict, so a false mismatch has to be visible rather than
+        // quietly change which path runs.
+        pr_err("patch syscall %d did not take: slot=0x%lx want=0x%lx\n", nr,
+               (unsigned long)READ_ONCE(ksu_syscall_table[nr]), (unsigned long)fn);
+        return -EIO;
+    }
+
     return 0;
 }
 
 // Direct syscall table patching: overwrite syscall_table[nr] with fn,
 // save original to *old, and record for restoration at module exit.
-void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
+int ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
 {
     if (ksu_syscall_table == NULL)
-        return;
+        return -ENOENT;
     if (nr < 0 || nr >= __NR_syscalls) {
         pr_info("invalid nr: %d\n", nr);
-        return;
+        return -EINVAL;
     }
 
     mutex_lock(&hooked_entries_lock);
@@ -66,6 +82,15 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
     if (old)
         *old = orig;
 
+    int ret = patch_syscall_table(nr, fn);
+    if (ret) {
+        mutex_unlock(&hooked_entries_lock);
+        return ret;
+    }
+
+    // Recorded only once the write has taken: an entry naming a slot that was
+    // never changed would have the exit path write a value back over one it
+    // never replaced.
     // Record for later restoration
     int i;
     bool found = false;
@@ -85,9 +110,8 @@ void ksu_syscall_table_hook(int nr, syscall_fn_t fn, syscall_fn_t *old)
         }
     }
 
-    patch_syscall_table(nr, fn);
-
     mutex_unlock(&hooked_entries_lock);
+    return 0;
 }
 
 // Restore syscall_table[nr] to its original value and remove from tracking list.

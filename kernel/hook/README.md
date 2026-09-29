@@ -108,6 +108,21 @@ selinuxfs `write_op` entries and `sel_open_handle_status`, and
 [`../feature/mount_hide.c`](../feature/mount_hide.c) patches the `.open` slot of the three
 procfs mount `file_operations`.
 
+On arm64 one class of kernel does not get as far as that fixmap store. Samsung's RKP/KDP
+hypervisor holds the kernel's static mappings read-only at stage 2 below anything EL1 can
+lift, so the store cannot land; a hypervisor that answers by trapping it rather than
+refusing it takes the `stop_machine()` rendezvous down with it, every CPU stays parked and
+the hardware watchdog resets the device. Nothing in the kernel distinguishes those answers
+before the attempt, so `ksu_patch_text()` declines on a build whose RKP/KDP symbols
+[`../infra/samsung_compat.c`](../infra/samsung_compat.c) can see, returning the error its
+callers already take their other route on.
+
+Not every such build refuses it, which is why that default is overridable:
+`CONFIG_KSU_STATIC_PATCH_LANDS=y` says this kernel takes the write. The platform
+[`kprobe_patch_compat.h`](kprobe_patch_compat.h) describes needs it — its reboot handshake
+installs through this write because the BRK route faults at that address, so a decline
+would leave the handshake with no channel at all.
+
 ### Scanning kernel text for a call
 
 Both `patch_memory.c` files export a third function that has nothing to do with patching.

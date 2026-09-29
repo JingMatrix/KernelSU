@@ -158,6 +158,11 @@ static uprobe_unregister_t p_uprobe_unregister;
 typedef struct task_struct *(*find_task_by_vpid_t)(pid_t nr);
 static find_task_by_vpid_t p_find_task_by_vpid;
 
+/* Every function below that calls through one of the pointers above is
+ * __nocfi, and has to be -- see infra/symbol_resolver.h for why, and for what
+ * the attribute does and does not cover. Here that is the uprobe
+ * register/unregister pair and the task lookup. */
+
 /* Both register AND unregister must be resolvable. A registration that can
  * never be retired becomes a use-after-free the moment the module is unloaded,
  * so the feature stays off rather than half-working. */
@@ -647,7 +652,7 @@ static bool uh_filter(struct uprobe_consumer *uc, struct mm_struct *mm)
 #endif
 
 /* --- register/unregister across the two uprobe ABIs --- */
-static int uh_uprobe_register(struct uhook *h)
+static int __nocfi uh_uprobe_register(struct uhook *h)
 {
 #if UHOOK_NEW_UPROBE
     h->uprobe = p_uprobe_register(h->inode, h->offset, 0, &h->uc);
@@ -663,7 +668,7 @@ static int uh_uprobe_register(struct uhook *h)
 #endif
 }
 
-static void uh_uprobe_unregister(struct uhook *h)
+static void __nocfi uh_uprobe_unregister(struct uhook *h)
 {
 #if UHOOK_NEW_UPROBE
     if (h->uprobe) {
@@ -726,7 +731,7 @@ static void uh_free(struct uhook *h)
     memset(h, 0, sizeof(*h));
 }
 
-static struct task_struct *uh_get_task(pid_t pid)
+static __nocfi struct task_struct *uh_get_task(pid_t pid)
 {
     struct task_struct *task = NULL;
 

@@ -143,6 +143,26 @@ meaningless; userspace reads the out-parameter instead, as `init_driver_fd()` in
 `has_kernelsu_v2()` in
 [`userspace/ksuinit/src/lib.rs`](../../userspace/ksuinit/src/lib.rs) both do.
 
+### When the kprobe itself is unsafe
+
+Some vendor kernels fault the instant execution reaches `__arm64_sys_reboot`'s own
+address, before `reboot_handler_pre()` ever runs, even though the kprobe's `BRK` write
+reads back clean and the page tables look ordinary -- the same fault
+[`hook/kprobe_patch_compat.h`](../hook/kprobe_patch_compat.h) checks for before the
+syscall-tracepoint dispatcher is armed. `ksu_supercalls_init()` runs that same check
+first and, when it comes back true, never calls `register_kprobe(&reboot_kp)` at all.
+Instead it replaces `sys_call_table[__NR_reboot]`'s own pointer with
+`ksu_reboot_table_replacement()`, through the same `ksu_syscall_table_hook()` /
+`ksu_syscall_table_unhook()` pair [`hook/syscall_hook.h`](../hook/syscall_hook.h)
+already exposes. That is a data write to a table entry, not a new instruction planted
+in existing text, and it is not the fault the kprobe hits: `reboot(2)` stays the wire
+protocol either way, `ksu_reboot_table_replacement()` recognises the same two magic
+numbers and installs the descriptor inline instead of deferring through `task_work`
+(nothing here runs atomically, so it does not need to), and any call that is not the
+handshake falls straight through to the real `__arm64_sys_reboot` via the saved
+function pointer. `ksu_supercalls_exit()` calls `ksu_syscall_table_unhook()` instead of
+`unregister_kprobe()` when this path was the one taken.
+
 The second install path skips the handshake, because the manager could never run it:
 Android app processes are confined by a [seccomp][seccomp-filter] filter that does not
 permit [`reboot(2)`][reboot-2]. `ksu_handle_setresuid()` in

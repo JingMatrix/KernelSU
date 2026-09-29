@@ -5,6 +5,7 @@
 #include "linux/version.h"
 #include "klog.h" // IWYU pragma: keep
 #include "ksu.h"
+#include "infra/cred_compat.h"
 
 /*
  * Cached SID values for frequently checked contexts.
@@ -232,5 +233,5 @@ void escape_to_root_for_adb_root(void)
         abort_creds(cred);
         return;
     }
-    commit_creds(cred);
+    ksu_commit_creds(cred);
 }

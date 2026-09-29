@@ -113,6 +113,12 @@ static task_call_func_t p_task_call_func;
 static valid_user_regs_t p_valid_user_regs;
 #endif
 
+/* Every function below that calls through one of the pointers above is
+ * __nocfi, and has to be -- see infra/symbol_resolver.h for why, and for what
+ * the attribute does and does not cover. Omitting it on one of them makes that
+ * supercall a reboot on any CFI-enforcing kernel, not a failure it can report.
+ */
+
 /* --- killguard state: protected tgids --- */
 static DEFINE_SPINLOCK(guard_lock);
 static pid_t guard_tgids[PTCTL_MAX_GUARD];
@@ -397,7 +403,7 @@ static bool sig_kp_registered;
  */
 static DEFINE_MUTEX(killguard_lock);
 
-static void killguard_register(void)
+static void __nocfi killguard_register(void)
 {
     if (!p_register_kprobe || !p_unregister_kprobe)
         return;
@@ -429,7 +435,7 @@ static bool killguard_ensure(void)
 }
 
 /* --- task lookup helper: returns a referenced task or NULL --- */
-static struct task_struct *get_task(pid_t pid)
+static __nocfi struct task_struct *get_task(pid_t pid)
 {
     struct task_struct *task = NULL;
     if (!p_find_task_by_vpid)
@@ -443,7 +449,7 @@ static struct task_struct *get_task(pid_t pid)
 }
 
 /* --- memory read/write via access_process_vm (chunked by userspace) --- */
-static long do_peek(struct ksu_ptctl_cmd *c, bool write)
+static long __nocfi do_peek(struct ksu_ptctl_cmd *c, bool write)
 {
     struct task_struct *task;
     void *kbuf;
@@ -739,7 +745,7 @@ static long do_info(struct ksu_ptctl_cmd *c)
     return 0;
 }
 
-static long do_sigsend(struct ksu_ptctl_cmd *c)
+static long __nocfi do_sigsend(struct ksu_ptctl_cmd *c)
 {
     struct task_struct *task;
     int sig = (int)c->arg1;
@@ -984,7 +990,7 @@ static void hwbp_handler(struct perf_event *bp, struct perf_sample_data *data, s
     /* hwbp_hit is completed from hwbp_hold_fn(), once the thread has parked. */
 }
 
-static long hwbp_set(struct ksu_ptctl_cmd *c, u64 addr, pid_t tgid)
+static long __nocfi hwbp_set(struct ksu_ptctl_cmd *c, u64 addr, pid_t tgid)
 {
     struct task_struct *leader, *t, **tasks;
     struct perf_event_attr attr;
@@ -1113,7 +1119,7 @@ static long hwbp_set(struct ksu_ptctl_cmd *c, u64 addr, pid_t tgid)
     return 0;
 }
 
-static void hwbp_clear(void)
+static void __nocfi hwbp_clear(void)
 {
     int i;
 
@@ -1295,7 +1301,7 @@ void ksu_ptctl_init(void)
             !!p_access_process_vm, !!p_register_kprobe, !!p_reg_hwbp, !!p_put_task_stack);
 }
 
-void ksu_ptctl_exit(void)
+void __nocfi ksu_ptctl_exit(void)
 {
     hwbp_clear();
     guard_clear();

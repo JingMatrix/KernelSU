@@ -25,5 +25,11 @@ int ksu_install_su_fd(void);
 bool ksu_is_su_session_fd(const struct file *filp);
 
 void ksu_supercalls_init(void);
+/* Whether the reboot handshake ended up on its kprobe. True only where the
+ * sanctioned write was refused and the probe then armed, which makes it the
+ * one thing this kernel has actually demonstrated about arming a kprobe at a
+ * .text address -- so it is the evidence another probe site can ask for
+ * instead of guessing. Meaningful only after ksu_supercalls_init(). */
+bool ksu_reboot_kprobe_armed(void);
 void ksu_supercalls_exit(void);
 #endif // __KSU_H_SUPERCALL

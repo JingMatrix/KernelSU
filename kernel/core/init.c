@@ -30,6 +30,8 @@
 #include "feature/ptctl.h"
 #include "feature/uhook.h"
 #include "infra/symbol_resolver.h"
+#include "infra/samsung_compat.h"
+#include "infra/samsung_defex.h"
 
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
 #include <asm/cpufeature.h>
@@ -87,6 +89,16 @@ module_param(allow_shell, bool, 0);
 bool ksu_no_custom_rc = false;
 module_param_named(norc, ksu_no_custom_rc, bool, 0);
 
+/* Leave SELinux enforcement exactly as this module found it, for a loader
+ * that is not finished yet. A late load can arrive from a jailbreak that had
+ * to clear the global enforcing flag to reach init_module at all, and whose
+ * remaining steps -- the exec of the userspace setup above all -- the policy
+ * refuses once that flag is back. Restoring it from here puts it back in the
+ * middle of that sequence rather than at its end, so a loader in that shape
+ * says so and restores it itself when its own work is done. */
+bool ksu_keep_permissive = false;
+module_param_named(keep_permissive, ksu_keep_permissive, bool, 0);
+
 #ifdef MODULE
 bool ksu_bundled = false;
 module_param_named(bundled, ksu_bundled, bool, 0);
@@ -137,6 +149,8 @@ int __init kernelsu_init(void)
     }
 
     ksu_init_symbol_resolver();
+    ksu_samsung_compat_probe();
+    ksu_samsung_defex_init();
     ksu_syscall_hook_init();
 
     // Block modules early, before vendor modules are loaded in second stage.
@@ -150,6 +164,9 @@ int __init kernelsu_init(void)
     ksu_shell_su_adb_only_init();
 
     ksu_supercalls_init();
+    /* After the handshake, not before: its outcome is the evidence this asks
+     * for -- see ksu_samsung_defex_arm_enforce_bypass(). */
+    ksu_samsung_defex_arm_enforce_bypass();
     ksu_app_profile_init();
     ksu_ptctl_init();
     ksu_uhook_init();
@@ -181,8 +198,12 @@ int __init kernelsu_init(void)
         ksu_feature_apply_forced();
 
         if (!getenforce()) {
-            pr_info("Permissive SELinux, enforcing\n");
-            setenforce(true);
+            if (ksu_keep_permissive) {
+                pr_info("Permissive SELinux, left as found (keep_permissive)\n");
+            } else {
+                pr_info("Permissive SELinux, enforcing\n");
+                setenforce(true);
+            }
         }
 
     } else {
@@ -214,6 +235,7 @@ void __exit kernelsu_exit(void)
     // point at module text and must be torn down before it is freed.
     ksu_uhook_exit();
     ksu_ptctl_exit();
+    ksu_samsung_defex_exit();
 
     ksu_supercalls_exit();
 
